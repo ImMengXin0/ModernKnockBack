@@ -1,0 +1,66 @@
+# Classic 鱼竿命中与受击保护（2.0）
+
+只修改 ModernKnockBack，不改核心、ThePit 或旧 KnockbackManager。classic 的近战仍使用原生攻击目标/距离，不恢复挥空补刀。
+
+## 查证结果
+
+联网读取了公开的 Spigot 1.8 源码镜像，并与本地 CraftBukkit 1.8.8 字节码交叉检查：
+
+- [EntityFishingHook.java](https://github.com/Attano/Spigot-1.8/blob/master/net/minecraft/server/v1_8_R3/EntityFishingHook.java)：每 tick 沿当前位置到“当前位置 + 本 tick 速度”的线段检查碰撞，方块先截断线段；目标包围盒固定膨胀 `0.3F`；实体命中调用 `damageEntity(projectile, 0.0F)`。
+- [EntityLiving.java](https://github.com/Attano/Spigot-1.8/blob/master/net/minecraft/server/v1_8_R3/EntityLiving.java)：`maxNoDamageTicks=20`；新受击设置 `noDamageTicks=20`、`hurtTicks=10`。剩余免疫大于最大值一半时，伤害不高于 `lastDamage` 的命中被拒绝；所以第二次零伤害杆通常需等待 10 tick。
+
+1.21.11 三核心实际 `ProjectileUtil.computeMargin` 为 `max(0, min(0.3, (tickCount-2)/20))`。出杆初期余量为 0，随后逐渐扩大，到第 8 tick 才达 0.3。高速杆在近距离碰到横移目标时常处于较小余量阶段。1.2.9 完全沿用这个现代判定，未模拟旧版固定余量。现代原生本身已有线段检测，不能将问题简单归结为“飞得快就穿模”。
+
+旧插件另外主动把零伤害杆的 `noDamageTicks` 设为 14，使默认重复杆和接刀在第 4 tick 即可接受。受击动画与伤害免疫不是同一个计时器；4 tick 已能再次 KB 时，上一击动画可能尚未结束。
+
+## 碰撞处理
+
+classic 在鱼钩自己的实体调度中，从当前实际位置沿本 tick 的速度做一次固定 0.3 余量的检查，使用核心原有的方块截断、最近目标选择和 `canHitEntityPublic`，不预测或回溯玩家位置、不改变钩子的年龄、不扩展近战距离。
+
+首个可用的调度 tick 即执行，随后每 tick 检查，包括无限距离/寿命、速度倍率为 1 的配置。仅处理飞行中且未挂钩、未落地、未入水的 classic 鱼钩。钓鱼、物品命中和 modern 继续使用原生流程。
+
+找到生物后派发正常 `ProjectileHitEvent`，由现有伤害/KB流程接管。保护插件取消碰撞或零伤害事件均可拦截；接触后移除钩子，被取消的接触不会在原生 tick 再次尝试。Folia 要求鱼钩、出杆者和目标均由当前区域拥有，跨区域不排队补打。原生查询仍受核心的已加载区域和可见性规则约束。
+
+0.3 是 1.8 鱼竿自身的固定碰撞余量，没有新增调参项。已移除的近战 0.1 膨胀/挥空补刀不受此变更影响。
+
+## 受击保护配置
+
+推荐 `plugins/ModernKnockBack/classic/combat.yml`：
+
+```yaml
+hit-interval-ticks: 10
+rod-hit-interval-ticks: 10
+rod-melee-interval-ticks: 10
+```
+
+实际连续杆间隔 = `max(hit-interval-ticks, rod-hit-interval-ticks)`。
+
+实际竿接刀间隔 = 上述两项与 `rod-melee-interval-ticks` 的最大值。
+
+三项接受 1..40 的整数。旧配置中的 4、6 或接刀 1/2 保留在文件中，但不再缩短共同受击窗口。例如旧 `10/4/4` 现在实际执行 `10/10`。`/mkb status` 显示实际间隔和 `rod margin=0.3`。新增字段自动补全、修改前备份；现有 KB 向量与出杆参数保留。
+
+| 默认时序 | 行为 |
+| --- | --- |
+| T 成功杆命中 | 一次真实零伤害受击、一次经典 KB、移除钩子、发送速度后播放受击效果 |
+| T～T+9 连续杆或接刀 | 拒绝额外受击与 KB，不排队，不重置保护期 |
+| T+10 新杆或新刀命中 | 可接受新的有效攻击；20 TPS 下约 500ms |
+| 事件取消 | 不强制补 KB/受击效果，撤回自身临时状态 |
+| 外部延长保护/已有正伤害免疫 | 保留，不逐击清空 |
+
+零伤害杆建立完整的普通免疫，默认 `noDamageTicks=20`，第 10 tick 降到 10。另有按受击者记录的保护，换新鱼钩、换持竿者或外部清零原生计时不能绕过它。处理伤害事件之前就锁住正在进行的同目标杆命中，避免监听器嵌套调用在 MONITOR 之前制造第二击；结束后释放临时锁。
+
+严格禁止窗口内竿接刀叠击是本插件按用户需求提供的规则：原版 1.8 的更高伤害可进入差额伤害分支，因此此处并非逐项复制全部原版伤害语义。“硬直”在此指受击/击退保护，玩家仍可移动、转向、跳跃；不施加定身或延迟后补发 KB。
+
+## 既有修复与复测
+
+继续保留：命中移除钩子、防挂脸/拉回、立即速度通知、classic 向量保护、玩家 UUID 排除互推、无挥空补刀。客户端队伍副本不修改真实计分板。
+
+替换为 `ModernKnockBack-2.0.jar` 后正常重启，无需删除配置。用 `/kbtest classic` 与 `/mkb status` 确认模式和实际间隔。建议在目标服务器检验：
+
+1. 近距离向左右横移玩家连续出杆，比较正中、擦边与明显偏离；隔墙不能命中。
+2. 快速连杆并立即切刀，T+10 之前不产生第二次 KB；持续出杆不延长首次保护窗口。
+3. 保护区、免疫期及事件取消时无强制受击；挂脸与收杆拉回不出现。
+4. 保留原自定义配置重启，检查向量、出杆速度、模式与实际保护间隔。
+5. 与真实 KnockbackSync、反作弊共同联机测试，切 modern 检查恢复原生规则。
+
+自动测试和三核心探针覆盖范围见 [验证记录](VERIFICATION.md)。尚未连接真实客户端，延迟、插值和完整对战手感仍须实服验证。

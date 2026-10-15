@@ -1,0 +1,29 @@
+# ModernKnockBack 2.0+ / classic 鱼竿推荐起点。
+# 合并到 plugins/ModernKnockBack/classic/profiles.yml 的 profiles.fishing_rod。
+# 这是配置片段，不要用它替换整个 profiles.yml，也不要新增第二个 profiles 根节点。
+# 保留你原有 defaults、player、bot 等近战配置，修改后 /mkb reload。
+# classic/config.yml 中 profiles.fishing-rod 必须指向 fishing_rod。
+# 若玩家被 /mkb setprofile 分配了其他 profile，该分配优先于类型路由：
+# 使用 /mkb setprofile <玩家> default 恢复类型路由，或同步其指定 profile 的杆参数。
+# classic/combat.yml 推荐 hit / rod-hit / rod-melee-interval-ticks 均为10（20 TPS 下 500ms受击保护）。
+profiles:
+  fishing_rod:
+    classic:
+      # 水平和抬升独立于近战：同状态覆盖旧动量，不靠逐次累积放大。
+      horizontal: 0.50
+      vertical-ground: 0.34
+      vertical-air: 0.34
+      horizontal-retention: 0.0
+      vertical-retention: 0.0
+      sprint-horizontal: 0.0
+      sprint-vertical: 0.0
+    rod:
+      enabled: true
+      cast-interval-ticks: 2
+      recast-delay-ticks: 0
+      horizontal-speed-multiplier: 1.15
+      vertical-speed-multiplier: 1.0
+      max-distance: 24.0
+      max-lifetime-ticks: 0
+      # 力度必须显式设置；0.4 对应完整 classic 向量，0.2 会减半。
+      impact-strength: 0.4

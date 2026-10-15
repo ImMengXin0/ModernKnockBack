@@ -1,0 +1,34 @@
+# ModernKnockBack 1.21.11. Chinese guide: docs/GUIDE-zh_CN.md
+config-version: 1
+enabled: true
+# By default only actual players and identified bots receive modifications.
+affect-other-living-entities: false
+respect-player-profile: true
+bot-metadata: [NPC, Bot, bot]
+compatibility:
+  # preserve-y: player melee Y remains native so KnockbackSync owns vertical compensation.
+  # before-sync: apply our Y settings first; KnockbackSync may replace them afterwards.
+  knockbacksync: preserve-y
+profiles:
+  melee: player
+  bot-melee: bot
+  arrow: arrow
+  crossbow: crossbow
+  trident: trident
+  mace: mace
+  spear: spear
+  sweep: sweep
+  shield-block: shield
+  fishing-rod: fishing_rod
+  wind-charge: wind_charge
+  explosion: explosion
+  crystal: crystal
+  tnt: tnt
+  regularity: regularity
+  grim-reaper: grim_reaper
+  other-projectile: projectile
+  damage: default
+  unknown: default
+# Exact route: type.attacker-kind.victim-kind: profile. Kinds: player / bot / other / unknown.
+# Example: arrow.player.bot: arrow_to_bot (create its profile first).
+matchups: {}

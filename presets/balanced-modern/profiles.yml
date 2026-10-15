@@ -1,0 +1,116 @@
+# ModernKnockBack 2.0
+# 开启 native 的配置：匹配原生公式时，倍率仅调整新增推力。
+# 不适用/不匹配的事件退回增量倍率；数值不是击退距离（格）。
+# 这是一套实服调试起点，尚未进行真人 PvP 手感测试。
+defaults:
+  enabled: true
+  # 默认关闭，只在下方列出的普通受击配置启用；特殊技能不调参。
+  native:
+    enabled: false
+    horizontal-retention-ground: 0.5
+    horizontal-retention-air: 0.5
+    vertical-retention-ground: 0.5
+    vertical-max-ground: 0.4
+    air-vertical-mode: preserve
+    vertical-max-air: 0.4
+  horizontal:
+    ground: 1.0
+    air: 1.0
+  vertical:
+    ground: 1.0
+    air: 1.0
+
+  # 原生已经计算蓄力、疾跑、暴击及附魔，不额外放大。
+  modern:
+    sprint-multiplier: 1.0
+    critical-multiplier: 1.0
+    weak-hit-multiplier: 1.0
+
+  # 不统一截断强击退，避免改变风弹移动、重锤和爆炸玩法。
+  limits:
+    horizontal: 0.0
+    upward: 0.0
+    downward: 0.0
+
+  # 放在 defaults，确保玩家通过 /mkb setprofile 指定其他配置后，
+  # 持竿时仍继承同样的抛投节奏。仅在鱼竿相关事件中使用。
+  rod:
+    enabled: true
+    # 20 TPS 下：两次抛投至少间隔 200ms；收杆后至少等待 100ms。
+    cast-interval-ticks: 4
+    recast-delay-ticks: 2
+    horizontal-speed-multiplier: 1.05
+    vertical-speed-multiplier: 1.0
+    # 相对钩子首个调度 tick 的位置，不是相对移动中的玩家。
+    max-distance: 24.0
+    # 约 5 秒自动移除；适用于 PvP，长期钓鱼建议改为 0。
+    max-lifetime-ticks: 100
+    # 开启轻微鱼钩碰撞击退，不增加伤害；纯现代原版改为 0.0。
+    # 抗击退属性由原生处理，收杆拉回力度仍是原版。
+    impact-strength: 0.20
+
+profiles:
+  default: {}
+
+  # 地面/空中略减新增推力，旧水平速度仍保留 50%。
+  # 不额外压低 Y，避免与 KnockbackSync 的落地补偿冲突。
+  player:
+    native:
+      enabled: true
+    horizontal:
+      ground: 0.95
+      air: 0.90
+
+  # Bot 与真人相同；不给予某一方额外击退优势。
+  bot:
+    native:
+      enabled: true
+    horizontal:
+      ground: 0.95
+      air: 0.90
+
+  # 普通受伤 KB 用独立推力模式；冲击附加 PUSH 仍用增量倍率。
+  arrow:
+    native:
+      enabled: true
+    horizontal:
+      ground: 0.95
+      air: 0.90
+  crossbow:
+    native:
+      enabled: true
+    horizontal:
+      ground: 0.95
+      air: 0.90
+
+  # 保留投掷、重锤及长矛的现代武器特色。
+  trident: {}
+  mace: {}
+  spear: {}
+
+  sweep:
+    native:
+      enabled: true
+    horizontal:
+      ground: 0.95
+      air: 0.95
+  shield: {}
+
+  # 原生碰撞强度来自 rod.impact-strength，这里独立调整新增推力。
+  fishing_rod:
+    native:
+      enabled: true
+    horizontal:
+      ground: 1.0
+      air: 0.90
+
+  # 不削弱风弹移动、风爆附魔或水晶/TNT 的原生击退效果。
+  wind_charge: {}
+  explosion: {}
+  crystal: {}
+  tnt: {}
+  projectile: {}
+
+  # 保留名称以兼容已有玩家设置和 API；没有专属 KB 调整。
+  regularity: {}
+  grim_reaper: {}

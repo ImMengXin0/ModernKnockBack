@@ -1,0 +1,107 @@
+# ModernKnockBack 2.0：快节奏现代 PvP 试用预设
+# 倍率不是击退距离，也不是延迟参数；仍需实服对战确认手感。
+defaults:
+  enabled: true
+  native:
+    enabled: false
+    # 保持原生惯性保留比例，避免额外改变走位和反向移动。
+    horizontal-retention-ground: 0.5
+    horizontal-retention-air: 0.5
+    vertical-retention-ground: 0.5
+    vertical-max-ground: 0.4
+    # 空中不主动增加向上速度。
+    air-vertical-mode: preserve
+    vertical-max-air: 0.4
+  horizontal:
+    ground: 1.0
+    air: 1.0
+  vertical:
+    ground: 1.0
+    air: 1.0
+  # 原生蓄力、疾跑、附魔及抗击退照常生效，不重复放大。
+  modern:
+    sprint-multiplier: 1.0
+    critical-multiplier: 1.0
+    weak-hit-multiplier: 1.0
+  # 0 表示不额外截断击退增量。
+  limits:
+    horizontal: 0.0
+    upward: 0.0
+    downward: 0.0
+
+  # 放入 defaults，玩家手动分配其他 profile 后也继承这些鱼竿参数。
+  rod:
+    enabled: true
+    # 20 TPS：抛投至少间隔 150ms，收杆后至少等待 50ms。
+    # 提前抛投会被拒绝，不会排队等待；不改变客户端挥手动画。
+    cast-interval-ticks: 3
+    recast-delay-ticks: 1
+    # 钩子归当前区域拥有时即时调整速度，否则在首次实体调度时设置一次。
+    horizontal-speed-multiplier: 1.10
+    vertical-speed-multiplier: 1.0
+    # 从钩子首个调度 tick 位置计距；设为 0 可取消额外距离限制。
+    max-distance: 24.0
+    # 不再因额外的 5 秒寿命限制打断普通钓鱼。
+    max-lifetime-ticks: 0
+    # 轻微碰撞击退，不增加伤害；纯原版鱼竿玩法设为 0.0。
+    # 抗击退由原生处理；收杆拉回力度不受此参数控制。
+    impact-strength: 0.20
+
+profiles:
+  default: {}
+
+  # 匹配原生公式时仅调整新增推力：地面原生、空中略减。
+  # 不匹配时安全回退为击退增量倍率。
+  player:
+    native:
+      enabled: true
+    horizontal:
+      ground: 1.0
+      air: 0.95
+  bot:
+    native:
+      enabled: true
+    horizontal:
+      ground: 1.0
+      air: 0.95
+
+  # 普通箭矢受伤走 native；冲击附魔额外 PUSH 走增量倍率。
+  arrow:
+    native:
+      enabled: true
+    horizontal:
+      ground: 0.95
+      air: 0.95
+  crossbow:
+    native:
+      enabled: true
+    horizontal:
+      ground: 0.95
+      air: 0.95
+  sweep:
+    native:
+      enabled: true
+    horizontal:
+      ground: 0.95
+      air: 0.95
+  fishing_rod:
+    native:
+      enabled: true
+    horizontal:
+      ground: 1.0
+      air: 0.95
+
+  # 特殊武器、风弹移动和爆炸保持原生倍率。
+  trident: {}
+  mace: {}
+  spear: {}
+  shield: {}
+  wind_charge: {}
+  explosion: {}
+  crystal: {}
+  tnt: {}
+  projectile: {}
+
+  # 仅兼容已有玩家数据/API 名称，无专属 KB 调整。
+  regularity: {}
+  grim_reaper: {}

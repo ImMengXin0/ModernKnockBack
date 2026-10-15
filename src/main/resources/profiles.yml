@@ -1,0 +1,66 @@
+# All default multipliers are 1: preserve the server's modern combat.
+# Each named profile inherits defaults; profiles must be explicitly named in this file.
+# Values scale native impulse (velocity delta), NOT damage or distance in blocks.
+defaults:
+  enabled: true
+  # Opt in per profile. Missing this section preserves 1.0 impulse-multiplier behavior.
+  # Applies only to verified LivingEntity knockback; explosion/push use impulse fallback.
+  native:
+    enabled: false
+    horizontal-retention-ground: 0.5
+    horizontal-retention-air: 0.5
+    vertical-retention-ground: 0.5
+    # Caps resulting Y, unlike limits.upward which caps the impulse.
+    vertical-max-ground: 0.4
+    # preserve: retain native air Y; add: add strength * vertical.air up to vertical-max-air.
+    air-vertical-mode: preserve
+    vertical-max-air: 0.4
+  horizontal:
+    ground: 1.0
+    air: 1.0
+  vertical:
+    ground: 1.0
+    air: 1.0
+  # Native cooldown/sprint/critical eligibility already applies. These are EXTRA multipliers.
+  modern:
+    sprint-multiplier: 1.0
+    critical-multiplier: 1.0
+    # Linear interpolation from weak-hit-multiplier at 0 charge to 1 at full charge.
+    weak-hit-multiplier: 1.0
+  # Clamp impulse magnitude; 0 means unlimited. Does not cap total existing motion.
+  limits:
+    horizontal: 0.0
+    upward: 0.0
+    downward: 0.0
+  rod:
+    enabled: true
+    cast-interval-ticks: 0
+    recast-delay-ticks: 0
+    horizontal-speed-multiplier: 1.0
+    vertical-speed-multiplier: 1.0
+    # Distance from hook position at its first scheduled tick, not from the moving player.
+    # Native rod distance remains a ceiling; 0 adds no extra restriction.
+    max-distance: 0.0
+    max-lifetime-ticks: 0
+    # Opt-in rod collision KB: 0 preserves modern vanilla hooking; 0.2 is a mild PvP starting point.
+    # Uses native knockback (resistance included), then the fishing-rod profile. No added damage.
+    impact-strength: 0.0
+profiles:
+  default: {}
+  player: {}
+  bot: {}
+  arrow: {}
+  crossbow: {}
+  trident: {}
+  mace: {}
+  spear: {}
+  sweep: {}
+  shield: {}
+  fishing_rod: {}
+  wind_charge: {}
+  explosion: {}
+  crystal: {}
+  tnt: {}
+  regularity: {}
+  grim_reaper: {}
+  projectile: {}

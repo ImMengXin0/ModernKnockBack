@@ -1,0 +1,36 @@
+# ModernKnockBack 2.0 / Minecraft 1.21.11
+# 快节奏 PvP 试用预设；与本目录 profiles.yml 配套使用。
+config-version: 1
+enabled: true
+affect-other-living-entities: false
+# default 玩家配置会自动按击打类型分流；命令指定的其他配置优先。
+respect-player-profile: true
+bot-metadata: [NPC, Bot, bot]
+
+compatibility:
+  # 真实玩家近战的垂直分量保留给 KnockbackSync。
+  knockbacksync: preserve-y
+
+profiles:
+  melee: player
+  bot-melee: bot
+  arrow: arrow
+  crossbow: crossbow
+  trident: trident
+  mace: mace
+  spear: spear
+  sweep: sweep
+  shield-block: shield
+  fishing-rod: fishing_rod
+  wind-charge: wind_charge
+  explosion: explosion
+  crystal: crystal
+  tnt: tnt
+  # 仅保留兼容名称，不做技能专属 KB 调整。
+  regularity: regularity
+  grim-reaper: grim_reaper
+  other-projectile: projectile
+  damage: default
+  unknown: default
+
+matchups: {}

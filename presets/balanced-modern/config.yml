@@ -1,0 +1,39 @@
+# ModernKnockBack 2.0 / Minecraft 1.21.11
+# 温和现代 PvP 预设。必须与同目录的 profiles.yml 配套使用。
+config-version: 1
+enabled: true
+
+# 仅调整玩家和已识别的 Bot；普通生物保留原版。
+affect-other-living-entities: false
+# 已通过命令指定的玩家配置仍优先；default 表示自动分类。
+respect-player-profile: true
+bot-metadata: [NPC, Bot, bot]
+
+compatibility:
+  # 安装 KnockbackSync 时，真实玩家近战的垂直分量交给它处理。
+  knockbacksync: preserve-y
+
+profiles:
+  melee: player
+  bot-melee: bot
+  arrow: arrow
+  crossbow: crossbow
+  trident: trident
+  mace: mace
+  spear: spear
+  sweep: sweep
+  shield-block: shield
+  fishing-rod: fishing_rod
+  wind-charge: wind_charge
+  explosion: explosion
+  crystal: crystal
+  tnt: tnt
+  # 只保留现有接口兼容项，不为这两个技能配置专属手感。
+  regularity: regularity
+  grim-reaper: grim_reaper
+  other-projectile: projectile
+  damage: default
+  unknown: default
+
+# 玩家与 Bot 共用同等力度，不额外按对战双方叠加倍率。
+matchups: {}

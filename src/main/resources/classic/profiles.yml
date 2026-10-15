@@ -1,0 +1,64 @@
+# Classic / ModernKnockBack 2.0 / Minecraft 1.21.11
+# 主要 KB 调参仅 5 项：统一水平、地面 Y、空中 Y、疾跑水平、附加 Y。
+# 数值是目标速度，不是格数。基础、疾跑和附魔统一沿命中方向。
+# 默认覆盖旧动量；不使用蓄力/暴击倍率、现代增量限幅或高度锁定。
+# 击退附魔每级默认 +0.5 水平，Punch 每级 +0.6；默认尊重装备抗性。
+defaults:
+  enabled: true
+  classic:
+    horizontal: 0.4
+    vertical-ground: 0.36075
+    vertical-air: 0.24775
+    sprint-horizontal: 0.5
+    # 疾跑或击退附魔有水平附加时，加一次 Y；两者不会各加一次。
+    sprint-vertical: 0.1
+  rod:
+    enabled: true
+    cast-interval-ticks: 3
+    recast-delay-ticks: 1
+    horizontal-speed-multiplier: 1.10
+    vertical-speed-multiplier: 1.0
+    max-distance: 24.0
+    max-lifetime-ticks: 0
+    # 0.4 对应完整基础向量；命中走 0 伤害投射物受击判定，显示受击并击退。
+    # 默认不扣血；不清空已有免疫，允许正伤害接刀。classic 收杆不拉回生物。
+    impact-strength: 0.4
+profiles:
+  default: {}
+  player: {}
+  bot: {}
+  arrow: {}
+  crossbow: {}
+  # 鱼竿独立向量，不借用近战的疾跑推力；地面和空中统一手感。
+  fishing_rod:
+    classic:
+      horizontal: 0.50
+      vertical-ground: 0.34
+      vertical-air: 0.34
+      horizontal-retention: 0.0
+      vertical-retention: 0.0
+      sprint-horizontal: 0.0
+      sprint-vertical: 0.0
+    rod:
+      enabled: true
+      cast-interval-ticks: 2
+      recast-delay-ticks: 0
+      horizontal-speed-multiplier: 1.15
+      vertical-speed-multiplier: 1.0
+      max-distance: 24.0
+      max-lifetime-ticks: 0
+      # classic 的强度倍率为 impact-strength / 0.4；0.4 不额外削弱向量。
+      impact-strength: 0.4
+  trident: {}
+  mace: {}
+  spear: {}
+  sweep: {}
+  shield: {}
+  wind_charge: {}
+  explosion: {}
+  crystal: {}
+  tnt: {}
+  projectile: {}
+  # 保留接口名称，共用普通配置。
+  regularity: {}
+  grim_reaper: {}

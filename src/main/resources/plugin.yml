@@ -1,0 +1,20 @@
+name: ModernKnockBack
+version: '2.0'
+main: cn.mx.modernkb.ModernKnockbackPlugin
+api-version: '1.21.11'
+folia-supported: true
+description: Switchable classic and modern combat knockback profiles for Paper, Leaf, ASPaper and Folia.
+authors: [MX]
+softdepend: [KnockbackSync, Citizens]
+commands:
+  kbtest:
+    description: Switch classic/modern combat mode or reload the current mode
+    usage: /kbtest classic|modern|reload
+    permission: modernkb.admin
+  modernkb:
+    aliases: [mkb]
+    description: Modern knockback configuration and diagnostics
+    permission: modernkb.admin
+permissions:
+  modernkb.admin:
+    default: op

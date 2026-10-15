@@ -1,0 +1,25 @@
+# Classic 攻击节奏。攻速由临时属性 +1024 关闭蓄力；此处是受击间隔。
+# 10 tick / 20 TPS = 500ms，与原版 1.8 的常规伤害免疫窗口一致。
+# 同一受击者共享间隔，阻止窗口内更高伤害绕过免疫造成叠刀。
+# 不会逐击清空 noDamageTicks，也不会将点击排队延后执行。
+hit-interval-ticks: 10
+# 鱼钩共用完整受击窗口：实际取本项与 hit-interval-ticks 的较大值。
+# 旧配置中的 4 会保留，但不再把 10 tick 的免疫缩短到 4 tick。
+# 快速出杆不等于快速重复 KB；保护期内的杆不排队、不刷新保护期。
+rod-hit-interval-ticks: 10
+# 竿接刀的实际间隔取三项最大值，防止高伤害刀绕过零伤害杆的免疫叠击。
+# 默认 10 tick / 20 TPS = 500ms；这是受击保护，不限制玩家移动。
+# 两个 rod 字段兼容旧配置，可单独延长保护；三项均为 1..40。
+rod-melee-interval-ticks: 10
+disable-sweep: true
+# 在本次受击的 PlayerVelocityEvent 中保护 classic 最终向量，避免 KBS 改写 Y。
+# modern 不使用此保护，按 modern/config.yml 的 KnockbackSync 策略处理。
+protect-velocity-from-sync: true
+# 对应旧 KnockbackManager 的 stop_sprint（不是 stop_spring）。
+# false：按客户端 START/STOP 疾跑状态计算 KB，攻击后的原生 sprint 重置不消耗下一刀的疾跑附加。
+# 玩家主动停止疾跑仍立即生效；true 则按服务器实体状态计算，接受原生攻击重置。
+# 兼容旧字段 reset-sprint-on-hit；升级时请替换旧字段，勿保留相互矛盾的两个值。
+stop_sprint: false
+# 受击者在跳起后短窗口内命中，按旧版半动量规则保留当前速度，模拟 jump reset。
+jump-reset-enabled: true
+jump-reset-window-ticks: 2
