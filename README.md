@@ -1,4 +1,4 @@
-# ModernKnockBack 2.0.1
+# ModernKnockBack 2.0.2
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -18,13 +18,16 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 - classic 命中后移除鱼钩，避免挂脸和拉回；在受击者区域内发送速度包后再播放零伤害受击动画。
 - classic 连续鱼竿及竿接刀遵守完整受击窗口，默认 10 tick；固定 0.3 格鱼钩碰撞余量，改善近距离横移目标漏判。
 - classic 保留原生命中目标和攻击距离，不再根据挥手包补刀或扩大命中边缘；使用玩家 UUID 排除实体互推，保留鱼钩/箭的碰撞资格，modern 恢复原规则。
+- classic 屏蔽横扫攻击音效，支持普通音效包、实体音效包及组合包；modern 和排除玩家恢复原声音。
 - KnockbackSync 共存策略、Folia 实体调度、配置严格校验与原子保存。
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.1.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.2.jar`。
 
-2.0.1 修复 classic 贴身跳跃暴击时偶发的方向偏转：双方水平位置几乎重合时，使用命中时攻击者的水平朝向，避免放大极小位置差或沿用核心的随机方向。正常距离仍按攻击者到受击者的方向推开。无需新增配置，已有参数、疾跑/jump reset 与鱼竿处理保持兼容；验证范围见 [验证记录](docs/VERIFICATION.md)。
+2.0.2 在 classic 中屏蔽横扫攻击音效。三核心核对普通空手、剑、斧的默认攻击距离均为3.0格，继续使用原生距离，不添加距离配置或额外补刀。无需删除已有配置；验证范围见 [验证记录](docs/VERIFICATION.md)。
+
+2.0.1 修复 classic 贴身跳跃暴击时偶发的方向偏转：双方水平位置几乎重合时，使用命中时攻击者的水平朝向，避免放大极小位置差或沿用核心的随机方向。正常距离仍按攻击者到受击者的方向推开。
 
 2.0 为公开发布版本，沿用已确认可正常击退的 classic/modern 实现。安装时只保留一个本插件 Jar，并正常重启。Linux 等区分大小写的文件系统会在新目录尚无数据时将旧 `plugins/ModernKnockback/` 迁移到 `plugins/ModernKnockBack/`；已有配置、玩家分配与模式一并保留。若两个目录都已有数据，使用新目录且不合并覆盖。Java API 类名保持兼容，调用方依赖名称使用 `ModernKnockBack`。
 

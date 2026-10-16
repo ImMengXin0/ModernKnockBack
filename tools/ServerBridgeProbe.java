@@ -13,6 +13,7 @@ public final class ServerBridgeProbe {
         Class.forName("net.minecraft.server.Bootstrap").getMethod("bootStrap").invoke(null);
         verifyProjectileCollision();
         verifyRodSweep();
+        verifyAttackReach();
         RodVelocity.forServer();
         TeamPacketCodec codec = new TeamPacketCodec();
         Class<?> boardClass = Class.forName("net.minecraft.world.scores.Scoreboard");
@@ -64,6 +65,7 @@ public final class ServerBridgeProbe {
         require(rule.invoke(codec.decode(channel.readOutbound()).parameters()).toString().equals("ALWAYS"), "Disable failed to restore rules");
         require(channel.pipeline().context(overlay) == null, "Handler was not removed");
         channel.finishAndReleaseAll();
+        verifySweepSounds(codec, original);
         System.out.println("Native bridge probe OK (no running server / no client PvP test)");
     }
     private static void verifyProjectileCollision() throws Exception {
@@ -108,6 +110,96 @@ public final class ServerBridgeProbe {
         System.out.println("Native collision regression OK: 1.2.8 rod failure reproduced; projectile targeting and player push exemptions verified");
     }
     private static void require(boolean condition, String message) { if (!condition) throw new IllegalStateException(message); }
+
+    private static void verifyAttackReach() {
+        double reach = net.minecraft.world.entity.ai.attributes.Attributes.ENTITY_INTERACTION_RANGE.value().getDefaultValue();
+        require(reach == 3.0, "Core default player interaction range is not 3.0");
+        var player = Mockito.mock(net.minecraft.server.level.ServerPlayer.class, call -> switch (call.getMethod().getName()) {
+            case "getAttributeValue" -> reach;
+            case "isCreative", "isSpectator" -> false;
+            case "getEyePosition" -> net.minecraft.world.phys.Vec3.ZERO;
+            default -> call.callRealMethod();
+        });
+        for (var item : List.of(net.minecraft.world.item.ItemStack.EMPTY,
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_SWORD),
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.NETHERITE_AXE))) {
+            Mockito.doReturn(item).when(player).getActiveItem();
+            var range = player.entityAttackRange();
+            require(range.effectiveMaxRange(player) == 3.0f, "Default ordinary melee range changed for " + item);
+            require(player.isWithinAttackRange(new net.minecraft.world.phys.AABB(2.99, -0.5, -0.3, 3.59, 1.3, 0.3), 0),
+                    "Core rejected ordinary melee at 2.99 blocks");
+            require(!player.isWithinAttackRange(new net.minecraft.world.phys.AABB(3.01, -0.5, -0.3, 3.61, 1.3, 0.3), 0),
+                    "Core accepted ordinary melee beyond 3.0 without network tolerance");
+        }
+        System.out.println("Native reach OK: default hand/sword/axe range 3.0; 2.99 accepted, 3.01 rejected with zero tolerance");
+    }
+
+    private static void verifySweepSounds(TeamPacketCodec codec, Object team) throws Exception {
+        var registered = net.minecraft.core.registries.BuiltInRegistries.SOUND_EVENT
+                .wrapAsHolder(net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_SWEEP);
+        var direct = net.minecraft.core.Holder.direct(net.minecraft.sounds.SoundEvent.createVariableRangeEvent(
+                net.minecraft.resources.Identifier.withDefaultNamespace("entity.player.attack.sweep")));
+        var sweep = new net.minecraft.network.protocol.game.ClientboundSoundPacket(registered,
+                net.minecraft.sounds.SoundSource.PLAYERS, 1, 64, 2, 1, 1, 1);
+        var directSweep = new net.minecraft.network.protocol.game.ClientboundSoundPacket(direct,
+                net.minecraft.sounds.SoundSource.MASTER, 1, 64, 2, 0.5f, 1.5f, 2);
+        var attached = new net.minecraft.network.protocol.game.ClientboundSoundEntityPacket(registered,
+                net.minecraft.sounds.SoundSource.PLAYERS, Mockito.mock(net.minecraft.world.entity.Entity.class), 1, 1, 3);
+        var hurt = new net.minecraft.network.protocol.game.ClientboundSoundPacket(
+                net.minecraft.core.Holder.direct(net.minecraft.sounds.SoundEvents.PLAYER_HURT),
+                net.minecraft.sounds.SoundSource.PLAYERS, 1, 64, 2, 1, 1, 4);
+        var critical = new net.minecraft.network.protocol.game.ClientboundSoundPacket(
+                net.minecraft.core.Holder.direct(net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_CRIT),
+                net.minecraft.sounds.SoundSource.PLAYERS, 1, 64, 2, 1, 1, 5);
+        var rod = new net.minecraft.network.protocol.game.ClientboundSoundPacket(net.minecraft.core.Holder.direct(
+                net.minecraft.sounds.SoundEvent.createVariableRangeEvent(
+                        net.minecraft.resources.Identifier.withDefaultNamespace("entity.fishing_bobber.throw"))),
+                net.minecraft.sounds.SoundSource.PLAYERS, 1, 64, 2, 1, 1, 6);
+        var enabled = new AtomicBoolean(true);
+        var state = new CollisionTeams<Object>("Alice", "mkb_sound", codec.noCollision(null), codec::noCollision);
+        var channel = new EmbeddedChannel();
+        var overlay = new ClientCollisions.Overlay(channel, state, codec, enabled::get,
+                warning -> { throw new IllegalStateException(warning); });
+        channel.pipeline().addLast("overlay", overlay);
+        overlay.refresh(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        var allMuted = new net.minecraft.network.protocol.game.ClientboundBundlePacket(List.of(sweep, directSweep, attached));
+        for (Object packet : List.of(sweep, directSweep, attached, allMuted)) {
+            var promise = channel.newPromise();
+            channel.writeAndFlush(packet, promise); channel.runPendingTasks();
+            require(promise.isSuccess(), "Muted sound write promise was not completed");
+            require(channel.readOutbound() == null, "Classic sweep sound escaped suppression");
+        }
+        for (Object packet : List.of(hurt, critical, rod)) {
+            channel.writeOutbound(packet);
+            require(channel.readOutbound() == packet, "Unrelated combat sound changed");
+        }
+        var mixed = new net.minecraft.network.protocol.game.ClientboundBundlePacket(List.of(sweep, hurt,
+                (net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket) team));
+        channel.writeOutbound(mixed);
+        var filtered = (net.minecraft.network.protocol.game.ClientboundBundlePacket) channel.readOutbound();
+        var children = new ArrayList<Object>(); filtered.subPackets().forEach(children::add);
+        require(children.size() == 2 && children.getFirst() == hurt, "Mixed bundle lost unrelated sound or packet order");
+        Object parameters = codec.decode(children.getLast()).parameters();
+        require(parameters.getClass().getMethod("getCollisionRule").invoke(parameters).toString().equals("NEVER"),
+                "Mixed sound/team bundle broke classic collision rules");
+        var originalChildren = new ArrayList<Object>(); mixed.subPackets().forEach(originalChildren::add);
+        require(originalChildren.size() == 3 && originalChildren.getFirst() == sweep, "Shared sound bundle was mutated");
+        enabled.set(false); overlay.refresh(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        for (Object packet : List.of(sweep, directSweep, attached)) {
+            channel.writeOutbound(packet);
+            require(channel.readOutbound() == packet, "Modern/excluded viewer lost sweep sound");
+        }
+        enabled.set(true); overlay.refresh(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        overlay.remove(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        channel.writeOutbound(sweep);
+        require(channel.readOutbound() == sweep, "Sweep sound not restored after handler removal");
+        channel.finishAndReleaseAll();
+        System.out.println("Native sweep sound OK: positional/entity/direct holders muted; mixed bundles, write promises, other sounds and mode/disable restoration passed");
+    }
 
     private static void verifyRodSweep() throws Exception {
         var target = Mockito.mock(net.minecraft.server.level.ServerPlayer.class, call -> switch (call.getMethod().getName()) {

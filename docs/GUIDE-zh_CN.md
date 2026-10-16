@@ -1,11 +1,11 @@
 # ModernKnockBack 1.21.11 使用与接口
 
-当前版本 2.0.1，修复 classic 贴身跳跃暴击时的击退方向偏转。classic 鱼钩使用固定0.3格碰撞余量，连续杆及竿接刀默认保护10 tick，保留移除挂脸鱼钩、即时KB、防互推与原生近战距离。源码依据与复测见 [鱼竿修复](CLASSIC-ROD-STACK.md)。自动补全见 [配置补全](CONFIG-COMPLETION.md)，双模式及接口见 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
+当前版本 2.0.2，classic 屏蔽横扫音效，普通近战保持原生3.0格距离，保留2.0.1贴身暴击方向修复。classic 鱼钩使用固定0.3格碰撞余量，连续杆及竿接刀默认保护10 tick，保留移除挂脸鱼钩、即时KB、防互推与原生近战距离。源码依据与复测见 [鱼竿修复](CLASSIC-ROD-STACK.md)。自动补全见 [配置补全](CONFIG-COMPLETION.md)，双模式及接口见 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
 
 ## 安装
 
 1. 使用 Java 21 或更高版本，服务器版本必须为 Minecraft 1.21.11。
-2. 把 `ModernKnockBack-2.0.1.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
+2. 把 `ModernKnockBack-2.0.2.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
 3. 启动后检查 `/mkb status`，编辑当前模式目录 `plugins/ModernKnockBack/modern/` 或 `classic/` 内的配置，用 `/mkb reload` 重载，用 `/kbtest classic` 或 `/kbtest modern` 切换。
 4. 配置错误会拒绝应用，并保留当前已加载配置。启动时配置损坏会明确报错、停止启用，不会生成一份默认配置覆盖损坏文件。
 
@@ -120,7 +120,7 @@ Folia 上钩子、持竿玩家、目标必须由当前区域拥有，否则跳�
 - `preserve-y`（默认）：检测到启用的 KnockbackSync，且双方为真实玩家的近战时，保留原生 Y 增量。即使本插件扩展事件修改 Y，也会在提交前恢复；X/Z 仍可调整。
 - `before-sync`：允许本插件先调整 Y，但 KnockbackSync 后续可能替换垂直速度，不保证最终等于配置值。
 
-modern 不使用本插件的 `PlayerVelocityEvent` 保护；classic 按 combat.yml 的 protect-velocity-from-sync 在当前速度事件中保留经典最终向量。不拦包、不延迟重写玩家速度，KnockbackSync 继续负责自己的网络与落地同步。其公开 1.3.2 包没有 Folia 支持声明，开发分支已有 Folia 调度适配。**Folia 必须另行安装确实支持 Folia 的 KnockbackSync 构建**；本插件兼容调度不意味着可以让旧版 KnockbackSync 在 Folia 正常加载。`/mkb status` 显示是否加载和共存策略，能发现的无 Folia 声明版本会提示警告；若该插件被服务器拒绝加载，可能显示未安装，需要检查启动日志。
+modern 不使用本插件的 `PlayerVelocityEvent` 保护；classic 按 combat.yml 的 protect-velocity-from-sync 在当前速度事件中保留经典最终向量。不拦截速度包、不延迟重写玩家速度，KnockbackSync 继续负责自己的网络与落地同步。其公开 1.3.2 包没有 Folia 支持声明，开发分支已有 Folia 调度适配。**Folia 必须另行安装确实支持 Folia 的 KnockbackSync 构建**；本插件兼容调度不意味着可以让旧版 KnockbackSync 在 Folia 正常加载。`/mkb status` 显示是否加载和共存策略，能发现的无 Folia 声明版本会提示警告；若该插件被服务器拒绝加载，可能显示未安装，需要检查启动日志。
 
 采用 EntityScheduler 执行钩子/玩家任务；磁盘写入走 AsyncScheduler；配置用不可变对象一次性替换；攻击者不属于当前区域时不访问其背包、位置、PDC、元数据等状态，分类退回 unknown。Folia 的跨区射手信息可能未知，因此 arrow.player.bot 等精确路由可能退回 arrow 路由。
 

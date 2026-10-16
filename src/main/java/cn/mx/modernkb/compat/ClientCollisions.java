@@ -14,7 +14,7 @@ import org.bukkit.event.*;
 import org.bukkit.event.player.*;
 import org.bukkit.plugin.Plugin;
 
-/** Disables client-predicted pushing without changing server teams or nametag formatting. */
+/** Classic client rules: disable predicted pushing and mute the modern sweep attack sound. */
 public final class ClientCollisions implements Listener, AutoCloseable {
     private static final String HANDLER = "modernkb_collision";
     private final Plugin plugin;
@@ -69,10 +69,11 @@ public final class ClientCollisions implements Listener, AutoCloseable {
         Overlay(Channel channel, CollisionTeams<Object> state, TeamPacketCodec codec, BooleanSupplier active, Consumer<String> warning) {
             this.channel = channel; this.state = state; this.codec = codec; this.active = active; this.warning = warning;
         }
-        void update(ChannelHandlerContext context) {
+        void update(ChannelHandlerContext context) { update(context, active.getAsBoolean()); }
+        private void update(ChannelHandlerContext context, boolean enabled) {
             if (context == null || !channel.isActive()) return;
             try {
-                var messages = state.enabled(active.getAsBoolean());
+                var messages = state.enabled(enabled);
                 for (var message : messages) context.write(codec.encode(message));
                 if (!messages.isEmpty()) context.flush();
             } catch (ReflectiveOperationException ex) { throw new IllegalStateException("Cannot update collision overlay", ex); }
@@ -92,8 +93,16 @@ public final class ClientCollisions implements Listener, AutoCloseable {
             });
         }
         @Override public void write(ChannelHandlerContext context, Object message, ChannelPromise promise) throws Exception {
-            update(context);
-            var output = codec.transform(message, state);
+            boolean enabled = active.getAsBoolean();
+            update(context, enabled);
+            var output = codec.transform(message, state, enabled);
+            if (output.isEmpty()) {
+                // Dropped packets still need a completed write promise; otherwise the
+                // connection's completion listeners can wait forever for a muted sound.
+                io.netty.util.ReferenceCountUtil.release(message);
+                promise.trySuccess();
+                return;
+            }
             for (int index = 0; index < output.size(); index++)
                 context.write(output.get(index), index == output.size() - 1 ? promise : context.voidPromise());
         }
