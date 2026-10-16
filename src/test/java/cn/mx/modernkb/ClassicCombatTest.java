@@ -149,6 +149,68 @@ public class ClassicCombatTest {
         return new com.destroystokyo.paper.event.entity.EntityKnockbackByEntityEvent(victim, attacker,
                 EntityKnockbackEvent.Cause.ENTITY_ATTACK, 0.4f, new Vector(0.4, 0.4, 0));
     }
+    @Test public void coincidentCriticalHitNeverUsesRandomNativeKnockbackDirection() {
+        when(attacker.getLocation()).thenReturn(new Location(null, 0, 64, 0, 0, 80));
+        when(victim.getLocation()).thenReturn(new Location(null, 0, 64, 0));
+        var damage = damage(); when(damage.isCritical()).thenReturn(true);
+        classic.acceptedDamage(damage);
+        var critical = new HitContext(victim.getUniqueId(), attacker.getUniqueId(), attacker.getUniqueId(), HitType.MELEE,
+                CombatantKind.PLAYER, CombatantKind.PLAYER, "ENTITY_ATTACK", true, false, true, 1, false);
+        for (Vector nativePush : new Vector[]{new Vector(0.4, 0.4, 0), new Vector(-0.4, 0.4, 0), new Vector(0, 0.4, -0.4)}) {
+            var event = new com.destroystokyo.paper.event.entity.EntityKnockbackByEntityEvent(victim, attacker,
+                    EntityKnockbackEvent.Cause.ENTITY_ATTACK, 0.4f, nativePush);
+            var calculation = classic.calculate(event, critical, KnockbackMathTest.profile(), settings);
+            assertEquals(0, calculation.impulse().getX(), 1e-12);
+            assertEquals(0.4, calculation.impulse().getZ(), 1e-12);
+        }
+    }
+    @Test public void nearOverlappingCriticalHitKeepsItsFacingAcrossHeightAndPositionNoise() {
+        var critical = new HitContext(victim.getUniqueId(), attacker.getUniqueId(), attacker.getUniqueId(), HitType.MELEE,
+                CombatantKind.PLAYER, CombatantKind.PLAYER, "ENTITY_ATTACK", true, false, true, 1, false);
+        for (double height : new double[]{0, 0.25, 1.1}) {
+            for (double noise : new double[]{-0.001, 0, 0.001}) {
+                when(attacker.getLocation()).thenReturn(new Location(null, 0, 64 + height, 0, -90, 85));
+                when(victim.getLocation()).thenReturn(new Location(null, noise, 64, -noise));
+                var damage = damage(); when(damage.isCritical()).thenReturn(true);
+                classic.acceptedDamage(damage);
+                // Later look/position updates must not rotate a previously accepted hit.
+                when(attacker.getLocation()).thenReturn(new Location(null, 2, 64, 2, 90, -70));
+                var calculation = classic.calculate(knockback(), critical, KnockbackMathTest.profile(), settings);
+                assertEquals("height=" + height + ", noise=" + noise, 0.4, calculation.impulse().getX(), 1e-12);
+                assertEquals(0, calculation.impulse().getZ(), 1e-12);
+            }
+        }
+    }
+    @Test public void criticalOverlapSendsOneStableVectorForPlayersAndBotsWithSprintBonus() {
+        UUID source = attacker.getUniqueId();
+        UUID target = victim.getUniqueId();
+        when(tracker.source(eq(attacker), any())).thenReturn(new CombatTracker.Source(source, source, CombatantKind.PLAYER, HitType.MELEE, true, 1));
+        int tick = 100;
+        for (CombatantKind kind : new CombatantKind[]{CombatantKind.PLAYER, CombatantKind.BOT}) {
+            when(tracker.kind(victim)).thenReturn(kind);
+            for (boolean grounded : new boolean[]{true, false}) {
+                when(victim.getTicksLived()).thenReturn(tick); tick += 10;
+                when(attacker.getLocation()).thenReturn(new Location(null, 0, 65, 0, -90, 85));
+                when(victim.getLocation()).thenReturn(new Location(null, -0.001, 64, 0.001));
+                Vector before = new Vector(-0.3, -0.2, 0.7);
+                when(victim.getVelocity()).thenReturn(before);
+                when(tracker.context(eq(victim), any(), anyString(), anyBoolean())).thenReturn(new HitContext(
+                        target, source, source, HitType.MELEE, CombatantKind.PLAYER, kind,
+                        "ENTITY_ATTACK", grounded, true, true, 1, false));
+                var damage = damage(); when(damage.isCritical()).thenReturn(true); classic.acceptedDamage(damage);
+                var first = knockback(); listener.knockback(first); classic.finishedKnockback(first);
+                Vector after = before.clone().add(first.getKnockback());
+                assertEquals(0.9, after.getX(), 1e-12);
+                assertEquals(0, after.getZ(), 1e-12);
+                assertEquals((grounded ? 0.36075 : 0.24775) + 0.1, after.getY(), 1e-12);
+                when(victim.getVelocity()).thenReturn(after);
+                var extra = knockback(); listener.knockback(extra); assertTrue(extra.isCancelled());
+                var packet = new PlayerVelocityEvent(victim, new Vector(-0.4, 8, -0.4));
+                classic.beginVelocity(packet); classic.velocity(packet); assertEquals(after, packet.getVelocity());
+            }
+        }
+        assertEquals(4, classic.applied());
+    }
     @Test public void switchBackRestoresOriginalImmunityAndRemovesOnlyOwnedModifier() {
         classic.reconcile(victim); classic.reconcile(victim);
         assertEquals(20, immunity.get()); assertEquals(1, modifiers.size());

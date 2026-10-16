@@ -6,6 +6,9 @@ import org.bukkit.util.Vector;
 
 /** A deterministic classic final velocity, converted to a Paper delta only at the boundary. */
 public final class ClassicKnockbackMath {
+    // LivingEntity.knockback randomizes direction below this horizontal squared distance.
+    // Classic uses the attacker's captured yaw instead, including when attacker/victim Y differs.
+    private static final double MELEE_DIRECTION_EPSILON_SQUARED = 1.0e-5;
     private ClassicKnockbackMath() {}
     public record Attack(Vector direction, Vector facing, boolean sprint, int enchantment, int punch, double strength) {}
     public static Vector impulse(Vector before, HitContext hit, KnockbackProfile profile, Attack attack,
@@ -19,8 +22,9 @@ public final class ClassicKnockbackMath {
     public static Vector impulse(Vector before, HitContext hit, KnockbackProfile profile, Attack attack,
                                  double resistance, boolean heightLimited, boolean jumpReset) {
         var classic = profile.classic();
-        Vector direction = horizontal(attack.direction(), attack.facing());
         boolean melee = hit.type().melee();
+        Vector direction = melee ? meleeDirection(attack.direction(), attack.facing())
+                : horizontal(attack.direction(), attack.facing());
         double horizontal = (hit.grounded() ? classic.horizontalGround() : classic.horizontalAir()) * attack.strength();
         double vertical = (hit.grounded() ? classic.verticalGround() : classic.verticalAir()) * attack.strength();
         if (melee) {
@@ -43,6 +47,11 @@ public final class ClassicKnockbackMath {
         if (melee && classic.yLimit() && heightLimited) result.setY(classic.verticalAfterLimit());
         // A modern impulse cap would make the final velocity depend on the victim's old momentum.
         return result.subtract(before);
+    }
+    static Vector meleeDirection(Vector displacement, Vector facing) {
+        double length = KnockbackMath.finite(displacement) ? Math.hypot(displacement.getX(), displacement.getZ()) : 0;
+        return horizontal(length * length >= MELEE_DIRECTION_EPSILON_SQUARED
+                ? displacement : facing, facing);
     }
     static Vector horizontal(Vector preferred, Vector fallback) {
         Vector direction = preferred;

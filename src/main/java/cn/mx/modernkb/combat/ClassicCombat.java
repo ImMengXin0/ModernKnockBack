@@ -229,6 +229,10 @@ public final class ClassicCombat implements Listener {
             }
             if (source instanceof AbstractArrow arrow && arrow.getWeapon() != null)
                 punch = arrow.getWeapon().getEnchantmentLevel(Enchantment.PUNCH);
+            // Resolve melee direction when the hit is accepted, before native knockback can
+            // randomize a coincident XZ vector or a later listener changes position/yaw.
+            if (source instanceof LivingEntity)
+                direction = ClassicKnockbackMath.meleeDirection(direction, facing);
         }
         return new ClassicKnockbackMath.Attack(direction, facing, sprint, enchantment, punch, strength);
     }

@@ -95,4 +95,32 @@ public class ClassicKnockbackMathTest {
         assertEquals(new Vector(0.4, 0.24775, 0), ordinary);
         assertEquals(new Vector(0.8, 0.45775, -0.1), reset);
     }
+    @Test public void overlappingMeleeDirectionDependsOnYawNotTinyOffsetsHeightOrCriticalFlag() {
+        for (boolean critical : new boolean[]{false, true})
+            for (boolean grounded : new boolean[]{false, true})
+                for (double height : new double[]{0, -1.2, 1.2})
+                    for (double offset : new double[]{-0.001, 0, 0.001}) {
+                        var hit = KnockbackMathTest.hit(HitType.MELEE, grounded, true, critical, 1, false);
+                        var attack = new ClassicKnockbackMath.Attack(new Vector(offset, height, -offset),
+                                new Vector(0, 0, 1), true, 1, 0, 1);
+                        var result = ClassicKnockbackMath.impulse(new Vector(), hit, KnockbackMathTest.profile(), attack, 0, false);
+                        assertEquals(0, result.getX(), 1e-12);
+                        assertEquals(1.4, result.getZ(), 1e-12);
+                        assertEquals((grounded ? 0.36075 : 0.24775) + 0.1, result.getY(), 1e-12);
+                    }
+    }
+    @Test public void resolvedMeleeOutsideCoincidentToleranceStillPushesAwayFromAttacker() {
+        var hit = KnockbackMathTest.hit(HitType.MELEE, true, false, true, 1, false);
+        for (Vector displacement : new Vector[]{new Vector(0.004, -1.2, 0), new Vector(2, -1.2, 0)}) {
+            var attack = new ClassicKnockbackMath.Attack(displacement, new Vector(0, 0, -1), false, 0, 0, 1);
+            assertEquals(new Vector(0.4, 0.36075, 0), ClassicKnockbackMath.impulse(new Vector(), hit, KnockbackMathTest.profile(), attack, 0, false));
+        }
+    }
+    @Test public void slowRodAndArrowKeepFlightDirectionInsteadOfBorrowingMeleeTolerance() {
+        for (HitType type : new HitType[]{HitType.FISHING_ROD, HitType.ARROW, HitType.CROSSBOW}) {
+            var hit = KnockbackMathTest.hit(type, true, false, false, 1, false);
+            var attack = new ClassicKnockbackMath.Attack(new Vector(-0.001, -0.1, 0), new Vector(0, 0, 1), false, 0, 0, 1);
+            assertEquals(new Vector(-0.4, 0.36075, 0), ClassicKnockbackMath.impulse(new Vector(), hit, KnockbackMathTest.profile(), attack, 0, false));
+        }
+    }
 }
