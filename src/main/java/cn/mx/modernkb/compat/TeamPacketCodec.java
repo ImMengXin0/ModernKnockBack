@@ -5,7 +5,7 @@ import java.lang.reflect.*;
 import java.util.*;
 import org.bukkit.entity.Player;
 
-/** Isolated 1.21.11 team/sound packet adapter; never mutates a shared packet or a live scoreboard. */
+/** Isolated 1.21.11 team/effect adapter; never mutates a shared packet or a live scoreboard. */
 final class TeamPacketCodec {
     private final Class<?> packet = Class.forName("net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket");
     private final Class<?> parameters = Class.forName(packet.getName() + "$Parameters");
@@ -30,7 +30,7 @@ final class TeamPacketCodec {
     private final Method collision = team.getMethod("setCollisionRule", Class.forName("net.minecraft.world.scores.Team$CollisionRule"));
     private final Object never = collision.getParameterTypes()[0].getField("NEVER").get(null);
     private final List<Method[]> copies = new ArrayList<>();
-    private final SweepSoundFilter sweepSounds = new SweepSoundFilter();
+    private final SweepEffectFilter sweepEffects = new SweepEffectFilter();
 
     TeamPacketCodec() throws ReflectiveOperationException {
         packetConstructor.setAccessible(true); method.setAccessible(true);
@@ -73,12 +73,12 @@ final class TeamPacketCodec {
     List<Object> transform(Object value, CollisionTeams<Object> state) throws ReflectiveOperationException {
         return transform(value, state, false);
     }
-    List<Object> transform(Object value, CollisionTeams<Object> state, boolean muteSweep) throws ReflectiveOperationException {
-        if (muteSweep && sweepSounds.matches(value)) return List.of();
+    List<Object> transform(Object value, CollisionTeams<Object> state, boolean hideSweep) throws ReflectiveOperationException {
+        if (hideSweep && sweepEffects.matches(value)) return List.of();
         if (bundle.isInstance(value)) {
             var output = new ArrayList<Object>();
-            for (Object child : (Iterable<?>) children.invoke(value)) output.addAll(transform(child, state, muteSweep));
-            if (muteSweep && output.isEmpty()) return List.of();
+            for (Object child : (Iterable<?>) children.invoke(value)) output.addAll(transform(child, state, hideSweep));
+            if (hideSweep && output.isEmpty()) return List.of();
             return List.of(bundleConstructor.newInstance(output));
         }
         var decoded = decode(value);

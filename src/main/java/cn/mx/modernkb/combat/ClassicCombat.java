@@ -3,6 +3,7 @@ package cn.mx.modernkb.combat;
 import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.config.*;
 import cn.mx.modernkb.compat.RodVelocity;
+import cn.mx.modernkb.rod.ClassicRodContact;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.event.entity.EntityPushedByEntityAttackEvent;
 import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
@@ -361,6 +362,7 @@ public final class ClassicCombat implements Listener {
             detachHook(hook);
             return RodResult.REJECTED;
         }
+        if (!ClassicRodContact.claim(hook)) return RodResult.REJECTED;
         reconcile(victim);
         // 1.8's projectile damage(0) cannot bypass an existing ordinary damage immunity window.
         if (blocked(victim, config) || victim.getNoDamageTicks() > victim.getMaximumNoDamageTicks() / 2
@@ -469,8 +471,12 @@ public final class ClassicCombat implements Listener {
     }
     private void detachHook(FishHook hook) {
         if (hook == null || !CombatTracker.owns(hook)) return;
-        if (hook.isValid()) hook.setHookedEntity(null);
-        hook.remove();
+        if (settings.get().classicEnabled()) ClassicRodContact.finish(hook);
+        else {
+            // A mode switch during damage must not leave an old classic projectile active.
+            if (hook.isValid()) hook.setHookedEntity(null);
+            hook.remove();
+        }
     }
     /** Non-player entities may emit native KB during damage(0); apply the classic vector once afterwards. */
     @EventHandler(priority = EventPriority.LOWEST)

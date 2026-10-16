@@ -13,6 +13,7 @@ public final class ServerBridgeProbe {
         Class.forName("net.minecraft.server.Bootstrap").getMethod("bootStrap").invoke(null);
         verifyProjectileCollision();
         verifyRodSweep();
+        verifyRetainedRodContact();
         verifyAttackReach();
         RodVelocity.forServer();
         TeamPacketCodec codec = new TeamPacketCodec();
@@ -65,7 +66,7 @@ public final class ServerBridgeProbe {
         require(rule.invoke(codec.decode(channel.readOutbound()).parameters()).toString().equals("ALWAYS"), "Disable failed to restore rules");
         require(channel.pipeline().context(overlay) == null, "Handler was not removed");
         channel.finishAndReleaseAll();
-        verifySweepSounds(codec, original);
+        verifySweepEffects(codec, original);
         System.out.println("Native bridge probe OK (no running server / no client PvP test)");
     }
     private static void verifyProjectileCollision() throws Exception {
@@ -111,6 +112,29 @@ public final class ServerBridgeProbe {
     }
     private static void require(boolean condition, String message) { if (!condition) throw new IllegalStateException(message); }
 
+    private static void verifyRetainedRodContact() {
+        var hook = Mockito.mock(net.minecraft.world.entity.projectile.FishingHook.class, Mockito.CALLS_REAL_METHODS);
+        var target = Mockito.mock(net.minecraft.world.entity.Entity.class);
+        var hit = new net.minecraft.world.phys.EntityHitResult(target, net.minecraft.world.phys.Vec3.ZERO);
+        var event = new org.bukkit.event.entity.ProjectileHitEvent(Mockito.mock(org.bukkit.entity.FishHook.class),
+                Mockito.mock(org.bukkit.entity.Player.class));
+        event.setCancelled(true);
+        // Exercise the real Paper pre-hit gate, mocking only the external Bukkit dispatch.
+        // It must prevent attachment without requiring removal of the actual bobber.
+        try (var events = Mockito.mockStatic(org.bukkit.craftbukkit.event.CraftEventFactory.class)) {
+            events.when(() -> org.bukkit.craftbukkit.event.CraftEventFactory.callProjectileHitEvent(hook, hit)).thenReturn(event);
+            for (int tick : new int[]{1, 2, 20}) {
+                hook.tickCount = tick;
+                require(hook.preHitTargetOrDeflectSelf(hit) == net.minecraft.world.entity.projectile.ProjectileDeflection.NONE,
+                        "Cancelled rod contact entered native hit handling");
+                require(hook.hookedIn == null && !hook.isRemoved(), "Cancelled contact attached or removed the retained bobber");
+            }
+        }
+        Mockito.verify(hook, Mockito.never()).setHookedEntity(Mockito.any());
+        Mockito.verify(hook, Mockito.never()).pullEntity(Mockito.any());
+        System.out.println("Native retained rod OK: repeated cancelled contacts do not attach, remove or pull the bobber/target");
+    }
+
     private static void verifyAttackReach() {
         double reach = net.minecraft.world.entity.ai.attributes.Attributes.ENTITY_INTERACTION_RANGE.value().getDefaultValue();
         require(reach == 3.0, "Core default player interaction range is not 3.0");
@@ -134,7 +158,7 @@ public final class ServerBridgeProbe {
         System.out.println("Native reach OK: default hand/sword/axe range 3.0; 2.99 accepted, 3.01 rejected with zero tolerance");
     }
 
-    private static void verifySweepSounds(TeamPacketCodec codec, Object team) throws Exception {
+    private static void verifySweepEffects(TeamPacketCodec codec, Object team) throws Exception {
         var registered = net.minecraft.core.registries.BuiltInRegistries.SOUND_EVENT
                 .wrapAsHolder(net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_SWEEP);
         var direct = net.minecraft.core.Holder.direct(net.minecraft.sounds.SoundEvent.createVariableRangeEvent(
@@ -155,6 +179,12 @@ public final class ServerBridgeProbe {
                 net.minecraft.sounds.SoundEvent.createVariableRangeEvent(
                         net.minecraft.resources.Identifier.withDefaultNamespace("entity.fishing_bobber.throw"))),
                 net.minecraft.sounds.SoundSource.PLAYERS, 1, 64, 2, 1, 1, 6);
+        var sweepParticle = new net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket(
+                net.minecraft.core.particles.ParticleTypes.SWEEP_ATTACK, true, true, 1, 64, 2, 0, 0, 0, 0, 1);
+        var criticalParticle = new net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket(
+                net.minecraft.core.particles.ParticleTypes.CRIT, false, false, 1, 64, 2, 0, 0, 0, 0, 5);
+        var damageParticle = new net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket(
+                net.minecraft.core.particles.ParticleTypes.DAMAGE_INDICATOR, false, false, 1, 64, 2, 0, 0, 0, 0, 5);
         var enabled = new AtomicBoolean(true);
         var state = new CollisionTeams<Object>("Alice", "mkb_sound", codec.noCollision(null), codec::noCollision);
         var channel = new EmbeddedChannel();
@@ -163,31 +193,32 @@ public final class ServerBridgeProbe {
         channel.pipeline().addLast("overlay", overlay);
         overlay.refresh(); channel.runPendingTasks();
         while (channel.readOutbound() != null) { }
-        var allMuted = new net.minecraft.network.protocol.game.ClientboundBundlePacket(List.of(sweep, directSweep, attached));
-        for (Object packet : List.of(sweep, directSweep, attached, allMuted)) {
+        var allMuted = new net.minecraft.network.protocol.game.ClientboundBundlePacket(List.of(sweep, directSweep, attached, sweepParticle));
+        for (Object packet : List.of(sweep, directSweep, attached, sweepParticle, allMuted)) {
             var promise = channel.newPromise();
             channel.writeAndFlush(packet, promise); channel.runPendingTasks();
             require(promise.isSuccess(), "Muted sound write promise was not completed");
             require(channel.readOutbound() == null, "Classic sweep sound escaped suppression");
         }
-        for (Object packet : List.of(hurt, critical, rod)) {
+        for (Object packet : List.of(hurt, critical, rod, criticalParticle, damageParticle)) {
             channel.writeOutbound(packet);
             require(channel.readOutbound() == packet, "Unrelated combat sound changed");
         }
-        var mixed = new net.minecraft.network.protocol.game.ClientboundBundlePacket(List.of(sweep, hurt,
+        var mixed = new net.minecraft.network.protocol.game.ClientboundBundlePacket(List.of(sweep, sweepParticle, hurt, criticalParticle,
                 (net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket) team));
         channel.writeOutbound(mixed);
         var filtered = (net.minecraft.network.protocol.game.ClientboundBundlePacket) channel.readOutbound();
         var children = new ArrayList<Object>(); filtered.subPackets().forEach(children::add);
-        require(children.size() == 2 && children.getFirst() == hurt, "Mixed bundle lost unrelated sound or packet order");
+        require(children.size() == 3 && children.getFirst() == hurt && children.get(1) == criticalParticle,
+                "Mixed bundle lost unrelated sound/particles or packet order");
         Object parameters = codec.decode(children.getLast()).parameters();
         require(parameters.getClass().getMethod("getCollisionRule").invoke(parameters).toString().equals("NEVER"),
                 "Mixed sound/team bundle broke classic collision rules");
         var originalChildren = new ArrayList<Object>(); mixed.subPackets().forEach(originalChildren::add);
-        require(originalChildren.size() == 3 && originalChildren.getFirst() == sweep, "Shared sound bundle was mutated");
+        require(originalChildren.size() == 5 && originalChildren.getFirst() == sweep, "Shared effect bundle was mutated");
         enabled.set(false); overlay.refresh(); channel.runPendingTasks();
         while (channel.readOutbound() != null) { }
-        for (Object packet : List.of(sweep, directSweep, attached)) {
+        for (Object packet : List.of(sweep, directSweep, attached, sweepParticle)) {
             channel.writeOutbound(packet);
             require(channel.readOutbound() == packet, "Modern/excluded viewer lost sweep sound");
         }
@@ -197,8 +228,10 @@ public final class ServerBridgeProbe {
         while (channel.readOutbound() != null) { }
         channel.writeOutbound(sweep);
         require(channel.readOutbound() == sweep, "Sweep sound not restored after handler removal");
+        channel.writeOutbound(sweepParticle);
+        require(channel.readOutbound() == sweepParticle, "Sweep particles not restored after handler removal");
         channel.finishAndReleaseAll();
-        System.out.println("Native sweep sound OK: positional/entity/direct holders muted; mixed bundles, write promises, other sounds and mode/disable restoration passed");
+        System.out.println("Native sweep effects OK: sweep sound/particles hidden; mixed bundles, promises, unrelated effects and mode/disable restoration passed");
     }
 
     private static void verifyRodSweep() throws Exception {

@@ -308,6 +308,7 @@ public class ClassicCombatTest {
     }
     private FishHook rodHook() {
         FishHook hook = mock(FishHook.class); when(hook.getVelocity()).thenReturn(new Vector(1, 0, 0));
+        HookTestState.install(hook);
         when(hook.getShooter()).thenReturn(attacker); when(hook.isValid()).thenReturn(true);
         bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(hook)).thenReturn(true);
         when(rodSource.getDirectEntity()).thenReturn(hook); when(rodSource.getCausingEntity()).thenReturn(attacker);
@@ -462,7 +463,7 @@ public class ClassicCombatTest {
         verify(victim, times(1)).knockback(anyDouble(), anyDouble(), anyDouble());
         verify(victim, never()).setVelocity(any()); assertEquals(0, classic.applied());
         verify(victim, never()).playHurtAnimation(anyFloat());
-        verify(hook).setHookedEntity(null); verify(hook).remove();
+        verify(hook).setHookedEntity(null); verify(hook, never()).remove();
         var sword = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(sword);
         assertFalse(sword.isCancelled());
     }
@@ -474,7 +475,7 @@ public class ClassicCombatTest {
         verify(victim, times(1)).knockback(anyDouble(), anyDouble(), anyDouble());
         var order = inOrder(victim, hook);
         order.verify(victim).knockback(anyDouble(), anyDouble(), anyDouble());
-        order.verify(hook).setHookedEntity(null); order.verify(hook).remove();
+        order.verify(hook).setHookedEntity(null); order.verify(hook).setVelocity(new Vector(-0.1, -0.05, 0));
         order.verify(victim).setVelocity(any());
         order.verify(victim).playHurtAnimation(anyFloat());
         verify(victim).setNoDamageTicks(20); verify(victim).setLastDamage(0);
@@ -527,7 +528,7 @@ public class ClassicCombatTest {
             when(victim.getTicksLived()).thenReturn(tick);
             FishHook recast = rodHook();
             assertEquals(ClassicCombat.RodResult.REJECTED, classic.rodImpactResult(recast, attacker, victim, 0.4));
-            verify(recast).remove();
+            verify(recast, never()).remove();
         }
         verify(victim, times(1)).damage(0, rodSource);
         verify(victim, times(1)).knockback(anyDouble(), anyDouble(), anyDouble());
@@ -592,15 +593,29 @@ public class ClassicCombatTest {
                 .withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
         FishHook hook = rodHook(); rodDamage(hook, event -> {});
         var results = new ArrayList<Vector>();
-        doAnswer(call -> {
+        org.mockito.stubbing.Answer<Object> collect = call -> {
             var event = new EntityKnockbackEvent(victim, EntityKnockbackEvent.Cause.UNKNOWN, new Vector(0.2, 0.2, 0));
             listener.knockback(event); classic.finishedKnockback(event); results.add(event.getKnockback());
             return null;
-        }).when(victim).knockback(anyDouble(), anyDouble(), anyDouble());
+        };
+        doAnswer(collect).when(victim).knockback(anyDouble(), anyDouble(), anyDouble());
         classic.rodImpact(hook, attacker, victim, 0.4);
-        when(victim.getTicksLived()).thenReturn(110); classic.rodImpact(hook, attacker, victim, 0.2);
+        FishHook recast = rodHook(); rodDamage(recast, event -> {});
+        doAnswer(collect).when(victim).knockback(anyDouble(), anyDouble(), anyDouble());
+        when(victim.getTicksLived()).thenReturn(110); classic.rodImpact(recast, attacker, victim, 0.2);
         assertEquals(new Vector(0.5274, 0.361375, 0), results.get(0));
         assertEquals(new Vector(0.2637, 0.1806875, 0), results.get(1));
+    }
+    @Test public void retainedHookCannotHitAgainAfterTheVictimImmunityExpires() {
+        FishHook hook = rodHook(); rodDamage(hook, event -> {});
+        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, victim, 0.4));
+        when(victim.getTicksLived()).thenReturn(125);
+        when(victim.getNoDamageTicks()).thenReturn(0);
+        assertEquals(ClassicCombat.RodResult.REJECTED, classic.rodImpactResult(hook, attacker, victim, 0.4));
+        verify(victim, times(1)).damage(0, rodSource);
+        verify(victim, times(1)).knockback(anyDouble(), anyDouble(), anyDouble());
+        verify(hook, times(1)).setVelocity(new Vector(-0.1, -0.05, 0));
+        verify(hook, never()).remove();
     }
     @Test public void nativeNonPlayerZeroDamageWindowAlsoUsesRodTiming() {
         settings = new Settings(true, true, true, true, Set.of(), settings.profiles(), Map.of(), Map.of())
@@ -656,7 +671,7 @@ public class ClassicCombatTest {
         }).when(manager).callEvent(isA(PlayerVelocityEvent.class));
         assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, victim, 0.4));
         var order = inOrder(hook, transport, victim);
-        order.verify(hook).remove();
+        order.verify(hook).setVelocity(new Vector(-0.1, -0.05, 0));
         order.verify(transport).send(victim, actual);
         order.verify(victim).playHurtAnimation(anyFloat());
         verify(manager, times(1)).callEvent(isA(PlayerVelocityEvent.class));
@@ -685,12 +700,12 @@ public class ClassicCombatTest {
         var sword = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(sword);
         assertFalse(sword.isCancelled());
     }
-    @Test public void lateCancelledRodDamageProducesNoAnimationKnockbackHookOrImmunity() {
+    @Test public void lateCancelledRodDamageProducesNoAnimationKnockbackOrImmunity() {
         FishHook hook = rodHook(); rodDamage(hook, event -> event.setCancelled(true));
         classic.rodImpact(hook, attacker, victim, 0.4);
         verify(victim).damage(0, rodSource);
         verify(victim, never()).knockback(anyDouble(), anyDouble(), anyDouble());
-        verify(victim, never()).playHurtAnimation(anyFloat()); verify(hook).setHookedEntity(null); verify(hook).remove();
+        verify(victim, never()).playHurtAnimation(anyFloat()); verify(hook).setHookedEntity(null); verify(hook, never()).remove();
         verify(victim, never()).setNoDamageTicks(anyInt());
         assertEquals(0, classic.applied());
         var sword = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(sword);
@@ -702,7 +717,7 @@ public class ClassicCombatTest {
         verify(victim).damage(0, rodSource);
         verify(victim, never()).knockback(anyDouble(), anyDouble(), anyDouble());
         verify(victim, never()).playHurtAnimation(anyFloat());
-        verify(hook).setHookedEntity(null); verify(hook).remove();
+        verify(hook).setHookedEntity(null); verify(hook, never()).remove();
     }
     @Test public void rodNeverClearsAnExistingDamageWindowToForceAHit() {
         FishHook hook = rodHook();

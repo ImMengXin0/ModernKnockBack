@@ -38,6 +38,7 @@ public class RodListenerTest {
         bukkit = mockStatic(Bukkit.class);
         plugin = mock(Plugin.class); when(plugin.isEnabled()).thenReturn(true);
         player = mock(Player.class); victim = mock(Player.class); hook = mock(FishHook.class);
+        HookTestState.install(hook);
         for (Entity entity : List.of(player, victim, hook)) bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(entity)).thenReturn(true);
         when(player.getUniqueId()).thenReturn(UUID.randomUUID()); when(victim.getUniqueId()).thenReturn(UUID.randomUUID());
         when(player.getTicksLived()).thenReturn(100); when(hook.getShooter()).thenReturn(player);
@@ -131,7 +132,8 @@ public class RodListenerTest {
         verify(classic).rodImpactResult(hook, player, victim, 0.2);
         verify(victim, never()).knockback(anyDouble(), anyDouble(), anyDouble());
         verify(victim, never()).setVelocity(any());
-        verify(hook).setHookedEntity(null); verify(hook).remove();
+        verify(hook).setHookedEntity(null); verify(hook, never()).remove();
+        verify(hook).setVelocity(new Vector(-0.1, -0.05, 0.1));
     }
     @Test public void classicDoesNotRequeueVelocityAfterCombatHasAlreadyDeliveredIt() {
         settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
@@ -141,6 +143,33 @@ public class RodListenerTest {
         when(classic.rodImpactResult(hook, player, victim, 0.2)).thenReturn(ClassicCombat.RodResult.APPLIED);
         listener.impact(new ProjectileHitEvent(hook, victim));
         verify(victim, never()).setVelocity(any());
+    }
+    @Test public void retainedHookDoesNotRepeatDamageOrBounceOnLaterNativeContacts() {
+        settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
+        ClassicCombat classic = mock(ClassicCombat.class);
+        listener = new RodListener(plugin, () -> settings, store, tracker, classic);
+        var first = new ProjectileHitEvent(hook, victim); listener.impact(first);
+        var second = new ProjectileHitEvent(hook, victim); listener.impact(second);
+        // A reconstructed listener must still recognize the same spent bobber.
+        listener = new RodListener(plugin, () -> settings, store, tracker, classic);
+        var afterReload = new ProjectileHitEvent(hook, victim); listener.impact(afterReload);
+        assertTrue(first.isCancelled()); assertTrue(second.isCancelled()); assertTrue(afterReload.isCancelled());
+        verify(classic, times(1)).rodImpactResult(hook, player, victim, 0.2);
+        verify(hook, times(1)).setVelocity(new Vector(-0.1, -0.05, 0.1));
+        verify(hook, never()).remove();
+    }
+    @Test public void impactDoesNotConsumeRecastDelayBeforeThePlayerActuallyReels() {
+        settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
+        listener.accepted(cast());
+        when(player.getTicksLived()).thenReturn(104);
+        listener.impact(new ProjectileHitEvent(hook, victim));
+        var beforeReel = cast(); listener.limit(beforeReel); assertFalse(beforeReel.isCancelled());
+        listener.accepted(new PlayerFishEvent(player, null, hook, PlayerFishEvent.State.REEL_IN));
+        when(player.getTicksLived()).thenReturn(105);
+        var early = cast(); listener.limit(early); assertTrue(early.isCancelled());
+        when(player.getTicksLived()).thenReturn(106);
+        var ready = cast(); listener.limit(ready); assertFalse(ready.isCancelled());
+        verify(hook, never()).remove();
     }
     @Test public void rejectedClassicRodCannotForceAVelocityNotification() {
         settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
@@ -213,11 +242,13 @@ public class RodListenerTest {
             hit.setCancelled(true); listener.impact(hit);
             return null;
         }).when(manager).callEvent(any());
-        doAnswer(call -> { when(hook.isValid()).thenReturn(false); return null; }).when(hook).remove();
         listener.accepted(cast()); firstTick().accept(mock(ScheduledTask.class));
         verify(collision).trace(hook); verify(manager).callEvent(any(ProjectileHitEvent.class));
-        verify(hook).remove(); verifyNoInteractions(tracker);
-        verify(scheduler, never()).runAtFixedRate(any(), any(), any(), anyLong(), anyLong());
+        verify(hook, never()).remove(); verifyNoInteractions(tracker);
+        var repeat = org.mockito.ArgumentCaptor.forClass(Consumer.class);
+        verify(scheduler).runAtFixedRate(eq(plugin), repeat.capture(), any(), eq(1L), eq(1L));
+        repeat.getValue().accept(mock(ScheduledTask.class));
+        verifyNoMoreInteractions(collision); // Retained spent hooks still get lifetime checks, not new contacts.
     }
     @Test public void classicSweepContinuesWithUnlimitedFlightSettingsAndEndsOnRemoval() {
         settings = new Settings(true, false, true, true, Set.of(), Map.of("default", KnockbackMathTest.profile(

@@ -14,7 +14,7 @@ import org.bukkit.event.*;
 import org.bukkit.event.player.*;
 import org.bukkit.plugin.Plugin;
 
-/** Classic client rules: disable predicted pushing and mute the modern sweep attack sound. */
+/** Classic client rules: disable predicted pushing and hide modern sweep sound/particles. */
 public final class ClientCollisions implements Listener, AutoCloseable {
     private static final String HANDLER = "modernkb_collision";
     private final Plugin plugin;
@@ -98,7 +98,7 @@ public final class ClientCollisions implements Listener, AutoCloseable {
             var output = codec.transform(message, state, enabled);
             if (output.isEmpty()) {
                 // Dropped packets still need a completed write promise; otherwise the
-                // connection's completion listeners can wait forever for a muted sound.
+                // connection's completion listeners can wait forever for a hidden effect.
                 io.netty.util.ReferenceCountUtil.release(message);
                 promise.trySuccess();
                 return;

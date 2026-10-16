@@ -37,9 +37,8 @@ public final class RodListener implements Listener {
         this.plugin = plugin; this.settings = settings; this.players = players; this.tracker = tracker;
         this.classic = classic; this.collision = collision;
     }
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void impact(ProjectileHitEvent event) {
-        if (event.isCancelled()) return;
         if (!(event.getEntity() instanceof FishHook hook) || !(event.getHitEntity() instanceof LivingEntity victim)
                 || !CombatTracker.owns(hook)) return;
         if (!(hook.getShooter() instanceof Player player) || !CombatTracker.owns(player)) return;
@@ -47,14 +46,14 @@ public final class RodListener implements Listener {
         if (rod == null) return;
         // Own the classic collision: vanilla may attach even after protection rejects the damage.
         boolean legacy = settings.get().classicEnabled();
+        boolean cancelled = event.isCancelled();
         if (legacy) event.setCancelled(true);
         try {
-            applyImpact(hook, player, victim, rod);
+            if (!cancelled && (!legacy || !ClassicRodContact.spent(hook))) applyImpact(hook, player, victim, rod);
         } finally {
             if (legacy) {
-                if (hook.isValid()) { hook.setHookedEntity(null); hook.remove(); }
-                hooks.remove(hook);
-                recordReel(player);
+                ClassicRodContact.finish(hook);
+                if (hook.isValid()) hooks.add(hook);
             }
         }
     }
@@ -180,6 +179,7 @@ public final class RodListener implements Listener {
     }
     private void sweep(FishHook hook, Settings snapshot) {
         if (!snapshot.classicEnabled() || !CombatTracker.owns(hook) || !hook.isValid()
+                || ClassicRodContact.spent(hook)
                 || hook.getState() != FishHook.HookState.UNHOOKED || hook.getHookedEntity() != null
                 || hook.isOnGround() || hook.isInWater()
                 || !(hook.getShooter() instanceof Player player) || !CombatTracker.owns(player)) return;
@@ -188,13 +188,12 @@ public final class RodListener implements Listener {
         LivingEntity victim = collision.trace(hook);
         if (victim == null || victim == player || !CombatTracker.owns(victim)) return;
         // Dispatch through the usual protection listeners and the one existing impact pipeline.
-        // Even a cancelled contact consumes this hook; it must not retry in the native tick.
+        // Even a cancelled contact spends this hook; it stays visible but cannot retry.
         try {
             org.bukkit.Bukkit.getPluginManager().callEvent(new ProjectileHitEvent(hook, victim));
         } finally {
-            if (hook.isValid()) { hook.setHookedEntity(null); hook.remove(); }
-            hooks.remove(hook);
-            recordReel(player);
+            ClassicRodContact.finish(hook);
+            if (hook.isValid()) hooks.add(hook);
         }
     }
     @EventHandler public void quit(PlayerQuitEvent event) { times.remove(event.getPlayer().getUniqueId()); }

@@ -1,6 +1,6 @@
 # 快节奏现代 PvP 试用配置
 
-适用于 ModernKnockBack 2.0.2 的 modern 模式 / Minecraft 1.21.11，与 `../knockbacksync-responsive/config.yml` 配套。全新安装的 modern 配置采用此预设；balanced-modern 是另一套可选起点。
+适用于 ModernKnockBack 2.0.3 的 modern 模式 / Minecraft 1.21.11，与 `../knockbacksync-responsive/config.yml` 配套。全新安装的 modern 配置采用此预设；balanced-modern 是另一套可选起点。
 
 ## 数值与目的
 
@@ -22,7 +22,7 @@
 
 ## 使用
 
-1. 使用 ModernKnockBack 2.0.2。
+1. 使用 ModernKnockBack 2.0.3。
 2. 备份服务器 `plugins/ModernKnockBack/modern/` 两份配置和根部的 players.yml。
 3. 将本目录 config.yml、profiles.yml 放入 `plugins/ModernKnockBack/modern/`。不要覆盖 players.yml。已有自定义且已分配给玩家的 profile 定义需合并保留，否则 reload 会拒绝加载。
 4. 执行 `/kbtest modern`；已在modern时执行 `/mkb reload`。确认成功后用 `/mkb status` 检查启用状态与 KnockbackSync 检测结果。Folia 需使用支持 Folia 的 KnockbackSync 构建。
