@@ -7,11 +7,15 @@ import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
 import io.papermc.paper.threadedregions.scheduler.EntityScheduler;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.util.*;
+import java.util.function.Consumer;
 import org.bukkit.Bukkit;
+import org.bukkit.damage.DamageSource;
 import org.bukkit.entity.*;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.player.*;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.util.Vector;
 import org.junit.*;
 import org.mockito.MockedStatic;
 import static org.junit.Assert.*;
@@ -76,6 +80,95 @@ public class CombatTrackerTest {
         when(attacker.isSprinting()).thenReturn(false);
         tracker.preAttack(new PrePlayerAttackEntityEvent(attacker, victim, true));
         assertTrue(tracker.context(victim, attacker, "ENTITY_ATTACK", false).sprinting());
+    }
+    @Test public void sameTickStopAttackStartPreservesCurrentHitAndRefreshesTheNextAttack() {
+        classic(false);
+        tracker.toggleSprint(new PlayerToggleSprintEvent(attacker, true));
+        when(attacker.isSprinting()).thenReturn(true);
+        tracker.preAttack(new PrePlayerAttackEntityEvent(attacker, victim, true));
+        assertTrue(tracker.context(victim, attacker, "ENTITY_ATTACK", false).sprinting());
+
+        // Input packets can be handled in the same server tick. An older pre-attack
+        // snapshot must neither hide this STOP from the next attack nor follow later START.
+        tracker.toggleSprint(new PlayerToggleSprintEvent(attacker, false));
+        tracker.preAttack(new PrePlayerAttackEntityEvent(attacker, victim, true));
+        tracker.toggleSprint(new PlayerToggleSprintEvent(attacker, true));
+        when(attacker.isSprinting()).thenReturn(false);
+        assertFalse(tracker.context(victim, attacker, "ENTITY_ATTACK", false).sprinting());
+
+        tracker.preAttack(new PrePlayerAttackEntityEvent(attacker, victim, true));
+        assertTrue(tracker.context(victim, attacker, "ENTITY_ATTACK", false).sprinting());
+        verify(attacker, never()).setSprinting(anyBoolean());
+    }
+    @Test public void previousTickCleanupCannotEraseANewerAttackSnapshot() {
+        classic(false);
+        List<Consumer<ScheduledTask>> cleanups = new ArrayList<>();
+        when(attacker.getScheduler().run(any(), any(), any())).thenAnswer(call -> {
+            cleanups.add(call.getArgument(1));
+            return mock(ScheduledTask.class);
+        });
+        tracker.toggleSprint(new PlayerToggleSprintEvent(attacker, true));
+        tracker.preAttack(new PrePlayerAttackEntityEvent(attacker, victim, true));
+        when(attacker.getTicksLived()).thenReturn(11);
+        tracker.toggleSprint(new PlayerToggleSprintEvent(attacker, false));
+        tracker.preAttack(new PrePlayerAttackEntityEvent(attacker, victim, true));
+        tracker.toggleSprint(new PlayerToggleSprintEvent(attacker, true));
+
+        // Model an older scheduled expiry running after a newer packet was handled.
+        cleanups.getFirst().accept(mock(ScheduledTask.class));
+        assertFalse(tracker.context(victim, attacker, "ENTITY_ATTACK", false).sprinting());
+        cleanups.get(1).accept(mock(ScheduledTask.class));
+        assertTrue(tracker.context(victim, attacker, "ENTITY_ATTACK", false).sprinting());
+    }
+    @Test public void acceptedHitSnapshotsKeepEqualVectorsAcrossAsymmetricEntityClocksAndArrivalGaps() {
+        classic(false);
+        // These are deterministic server-side arrival schedules, not simulated network RTT.
+        // Entity ages are independent, especially with different joins/region scheduling.
+        for (int[] clocks : new int[][]{{10, 8000, 0}, {8000, 10, 1}, {123, 6789, 4}})
+            for (boolean sprintAtHit : new boolean[]{false, true})
+                for (boolean swapPlayers : new boolean[]{false, true}) {
+                    tracker.clear();
+                    Player source = swapPlayers ? victim : attacker;
+                    Player target = swapPlayers ? attacker : victim;
+                    when(source.getTicksLived()).thenReturn(clocks[0]);
+                    when(target.getTicksLived()).thenReturn(clocks[1]);
+                    when(source.isSprinting()).thenReturn(!sprintAtHit);
+                    when(target.isOnGround()).thenReturn(true);
+                    tracker.toggleSprint(new PlayerToggleSprintEvent(source, sprintAtHit));
+                    tracker.preAttack(new PrePlayerAttackEntityEvent(source, target, true));
+
+                    var damageSource = mock(DamageSource.class);
+                    when(damageSource.getDirectEntity()).thenReturn(source);
+                    var damage = mock(EntityDamageByEntityEvent.class);
+                    when(damage.getEntity()).thenReturn(target);
+                    when(damage.getDamageSource()).thenReturn(damageSource);
+                    when(damage.isCritical()).thenReturn(true);
+                    when(target.getLastDamageCause()).thenReturn(damage);
+                    tracker.damage(damage);
+
+                    // Later input/attacker progress cannot rewrite the accepted damage.
+                    tracker.toggleSprint(new PlayerToggleSprintEvent(source, !sprintAtHit));
+                    when(source.getTicksLived()).thenReturn(clocks[0] + clocks[2]);
+                    tracker.preAttack(new PrePlayerAttackEntityEvent(source, target, true));
+                    var context = tracker.context(target, source, "ENTITY_ATTACK", false);
+                    assertEquals(sprintAtHit, context.sprinting());
+                    assertTrue(context.critical());
+                    var attack = new ClassicKnockbackMath.Attack(new Vector(3, 0, 4),
+                            new Vector(-1, 0, 0), context.sprinting(), 0, 0, 1);
+                    Vector before = new Vector(-0.3, -0.2, 0.7);
+                    Vector after = before.clone().add(ClassicKnockbackMath.impulse(before, context,
+                            KnockbackMathTest.profile(), attack, 0, false));
+                    double speed = sprintAtHit ? 0.9 : 0.4;
+                    assertEquals(speed * 0.6, after.getX(), 1e-12);
+                    assertEquals(speed * 0.8, after.getZ(), 1e-12);
+                    assertEquals(sprintAtHit ? 0.46075 : 0.36075, after.getY(), 1e-12);
+
+                    // Expiry follows the victim's own clock, never the attacker's entity age.
+                    when(target.getTicksLived()).thenReturn(clocks[1] + 1);
+                    var nextTick = tracker.context(target, source, "ENTITY_ATTACK", false);
+                    assertEquals(!sprintAtHit, nextTick.sprinting());
+                    assertFalse(nextTick.critical());
+                }
     }
     @Test public void cancelledSprintActionsDoNotChangeClassicState() {
         classic(false);

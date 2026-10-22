@@ -24,8 +24,8 @@ profiles.yml 的 defaults 补齐公共参数，缺失的内置 profile 名称补
 
 ## 安装与验证
 
-替换为2.0.3并正常重启；需要 classic 时执行 /kbtest classic，无需删除配置。缺失的 rod 间隔字段自动补为10，已有合法值保留。实际连续杆取 hit 与 rod-hit 的较大值，接刀取 hit、rod-hit、rod-melee 三项最大值。旧10/4/4因此执行10 tick保护，文件中数值仍保留；/mkb status显示实际值。详见 [鱼竿修复](CLASSIC-ROD-STACK.md)。
+替换为2.0.4并正常重启；需要 classic 时执行 /kbtest classic，无需删除配置。缺失的 rod 间隔字段自动补为10，已有合法值保留。实际连续杆取 hit 与 rod-hit 的较大值，接刀取 hit、rod-hit、rod-melee 三项最大值。旧10/4/4因此执行10 tick保护，文件中数值仍保留；/mkb status显示实际值。详见 [鱼竿修复](CLASSIC-ROD-STACK.md)。
 
 专项回归覆盖完整classic补全、鱼竿强度落盘、旧轴与继承值、false/0、自定义路由及profile、注释、旧疾跑别名、重复加载不写、不合法文件保留、备份失败、中途写失败回滚、并发编辑保护、缺失文件恢复及重启加载。最终构建与Leaf/ASPaper/Folia 1.21.11随包API检查结果附在发行包日志中。未在实际服务器部署或进行真人PvP测试。
 
-当前验证结果见 [验证记录](VERIFICATION.md)。本地 dist 附带 build-2.0.3.log 和 api-verification-2.0.3.txt；Jar 与源码包的 SHA256 见发行附件 SHA256SUMS.txt。
+当前验证结果见 [验证记录](VERIFICATION.md)。本地 dist 附带 build-2.0.4.log 和 api-verification-2.0.4.txt；Jar 与源码包的 SHA256 见发行附件 SHA256SUMS.txt。

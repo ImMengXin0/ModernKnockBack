@@ -15,6 +15,7 @@ public final class ServerBridgeProbe {
         verifyRodSweep();
         verifyRetainedRodContact();
         verifyAttackReach();
+        verifyClassicVelocityDelivery();
         RodVelocity.forServer();
         TeamPacketCodec codec = new TeamPacketCodec();
         Class<?> boardClass = Class.forName("net.minecraft.world.scores.Scoreboard");
@@ -156,6 +157,92 @@ public final class ServerBridgeProbe {
                     "Core accepted ordinary melee beyond 3.0 without network tolerance");
         }
         System.out.println("Native reach OK: default hand/sword/axe range 3.0; 2.99 accepted, 3.01 rejected with zero tolerance");
+    }
+
+    private static void verifyClassicVelocityDelivery() throws Exception {
+        // Execute the actual melee delivery branch. Its event starts with PRE-hit motion,
+        // and equal event values skip the native setVelocity call even if another plugin
+        // has directly changed the entity motion in the meantime.
+        var desired = new org.bukkit.util.Vector(0.4, 0.36075, -0.12);
+        var motion = new java.util.concurrent.atomic.AtomicReference<>(net.minecraft.world.phys.Vec3.ZERO);
+        var packets = new ArrayList<net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket>();
+        var nativeVictim = Mockito.mock(net.minecraft.server.level.ServerPlayer.class);
+        Mockito.when(nativeVictim.getDeltaMovement()).thenAnswer(call -> motion.get());
+        Mockito.doAnswer(call -> { motion.set(call.getArgument(0)); return null; })
+                .when(nativeVictim).setDeltaMovement(Mockito.any(net.minecraft.world.phys.Vec3.class));
+        nativeVictim.connection = Mockito.mock(net.minecraft.server.network.ServerGamePacketListenerImpl.class);
+        Mockito.doAnswer(call -> {
+            if (call.getArgument(0) instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket packet)
+                packets.add(packet);
+            return null;
+        }).when(nativeVictim.connection).send(Mockito.any(net.minecraft.network.protocol.Packet.class));
+        var victim = Mockito.mock(org.bukkit.craftbukkit.entity.CraftPlayer.class);
+        Field entity = org.bukkit.craftbukkit.entity.CraftEntity.class.getDeclaredField("entity");
+        entity.setAccessible(true); entity.set(victim, nativeVictim);
+        Mockito.doCallRealMethod().when(victim).getVelocity();
+        Mockito.doCallRealMethod().when(victim).setVelocity(Mockito.any(org.bukkit.util.Vector.class));
+        Mockito.when(victim.getUniqueId()).thenReturn(UUID.randomUUID());
+        Mockito.when(victim.getTicksLived()).thenReturn(100);
+        Mockito.when(victim.getScheduler()).thenReturn(Mockito.mock(io.papermc.paper.threadedregions.scheduler.EntityScheduler.class));
+        Mockito.when(nativeVictim.getBukkitEntity()).thenReturn(victim);
+        var manager = Mockito.mock(org.bukkit.plugin.PluginManager.class);
+        var server = Mockito.mock(org.bukkit.craftbukkit.CraftServer.class);
+        var level = Mockito.mock(net.minecraft.server.level.ServerLevel.class);
+        Mockito.when(level.getCraftServer()).thenReturn(server);
+        Mockito.when(server.getPluginManager()).thenReturn(manager);
+        var attacker = Mockito.mock(net.minecraft.server.level.ServerPlayer.class);
+        Mockito.when(attacker.level()).thenReturn(level);
+        Mockito.doCallRealMethod().when(attacker).causeExtraKnockback(Mockito.any(), Mockito.anyFloat(), Mockito.any());
+        var plugin = Mockito.mock(org.bukkit.plugin.Plugin.class);
+        Mockito.when(plugin.namespace()).thenReturn("modernknockback");
+        Mockito.when(plugin.getName()).thenReturn("ModernKnockBack");
+        var config = new cn.mx.modernkb.config.Settings(true, false, true, true, Set.of(), Map.of(), Map.of(), Map.of())
+                .withMode(cn.mx.modernkb.api.CombatMode.CLASSIC, cn.mx.modernkb.config.ClassicSettings.defaults());
+        var store = Mockito.mock(cn.mx.modernkb.config.PlayerStore.class);
+        Mockito.when(store.get(Mockito.any())).thenReturn(new cn.mx.modernkb.config.PlayerStore.Preference("default", false));
+        var hit = new cn.mx.modernkb.api.HitContext(victim.getUniqueId(), null, null, cn.mx.modernkb.api.HitType.MELEE,
+                cn.mx.modernkb.api.CombatantKind.PLAYER, cn.mx.modernkb.api.CombatantKind.PLAYER,
+                "ENTITY_ATTACK", true, false, false, 1, false);
+        // Leaf optionally takes an immediate tracker path; test the common native melee branch.
+        Field flush = null;
+        boolean previousFlush = false;
+        try {
+            flush = Class.forName("org.dreeam.leaf.config.modules.gameplay.Knockback").getField("flushKnockback");
+            previousFlush = flush.getBoolean(null); flush.setBoolean(null, false);
+        } catch (ClassNotFoundException ignored) { }
+        try (var bukkit = Mockito.mockStatic(org.bukkit.Bukkit.class)) {
+            bukkit.when(() -> org.bukkit.Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(true);
+            for (boolean protectedMotion : new boolean[]{false, true}) {
+                var classic = new cn.mx.modernkb.combat.ClassicCombat(plugin, () -> config, store,
+                        Mockito.mock(cn.mx.modernkb.combat.CombatTracker.class));
+                victim.setVelocity(desired.clone());
+                classic.applied(victim, new org.bukkit.util.Vector(), config, hit);
+                int[] dispatches = {0};
+                Mockito.doAnswer(call -> {
+                    require(++dispatches[0] == 1, "setVelocity recursively dispatched PlayerVelocityEvent");
+                    var event = (org.bukkit.event.player.PlayerVelocityEvent) call.getArgument(0);
+                    require(event.getVelocity().equals(desired), "Native event no longer starts with supplied old motion");
+                    classic.beginVelocity(event);
+                    // Simulate KBS's direct entity write; it need not mutate the event vector.
+                    victim.setVelocity(new org.bukkit.util.Vector(0.4, 0.8, -0.12));
+                    if (protectedMotion) classic.velocity(event);
+                    else event.setVelocity(desired.clone()); // Reproduce the old event-only protection.
+                    return null;
+                }).when(manager).callEvent(Mockito.any(org.bukkit.event.Event.class));
+                packets.clear();
+                attacker.causeExtraKnockback(nativeVictim, 0,
+                        org.bukkit.craftbukkit.util.CraftVector.toVec3(desired));
+                require(dispatches[0] == 1 && packets.size() == 1, "Native delivery did not send exactly once");
+                double expectedY = protectedMotion ? desired.getY() : 0.8;
+                require(Math.abs(packets.getFirst().getMovement().y - expectedY) < 1e-4,
+                        "Native packet ignored " + (protectedMotion ? "restored" : "directly modified") + " entity motion");
+                require(!nativeVictim.hurtMarked, "Native send left a duplicate velocity notification pending");
+                require(victim.getVelocity().equals(desired), "Native post-send old-motion restoration changed");
+            }
+        } finally {
+            if (flush != null) flush.setBoolean(null, previousFlush);
+        }
+        System.out.println("Native classic velocity OK: event-only equality bug reproduced; restored entity motion sent once without recursive events");
     }
 
     private static void verifySweepEffects(TeamPacketCodec codec, Object team) throws Exception {

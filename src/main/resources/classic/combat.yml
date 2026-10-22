@@ -12,7 +12,7 @@ rod-hit-interval-ticks: 10
 # 两个 rod 字段兼容旧配置，可单独延长保护；三项均为 1..40。
 rod-melee-interval-ticks: 10
 disable-sweep: true
-# 在本次受击的 PlayerVelocityEvent 中保护 classic 最终向量，避免 KBS 改写 Y。
+# 在本次受击的 PlayerVelocityEvent 中保护发包时的实际向量，包含 KBS 直接改实体速度的情况。
 # modern 不使用此保护，按 modern/config.yml 的 KnockbackSync 策略处理。
 protect-velocity-from-sync: true
 # 对应旧 KnockbackManager 的 stop_sprint（不是 stop_spring）。
@@ -20,6 +20,7 @@ protect-velocity-from-sync: true
 # 玩家主动停止疾跑仍立即生效；true 则按服务器实体状态计算，接受原生攻击重置。
 # 兼容旧字段 reset-sprint-on-hit；升级时请替换旧字段，勿保留相互矛盾的两个值。
 stop_sprint: false
-# 受击者在跳起后短窗口内命中，按旧版半动量规则保留当前速度，模拟 jump reset。
+# 核对跳跃输入、跳跃事件及成功移动后，在短窗口内保留半动量，模拟 jump reset。
+# 普通击飞、取消/重定向的移动不算主动跳跃；窗口按受击者服务器 tick 计时。
 jump-reset-enabled: true
 jump-reset-window-ticks: 2

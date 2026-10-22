@@ -4,6 +4,7 @@ import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.config.*;
 import cn.mx.modernkb.compat.RodVelocity;
 import cn.mx.modernkb.rod.ClassicRodContact;
+import com.destroystokyo.paper.event.player.PlayerJumpEvent;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.event.entity.EntityPushedByEntityAttackEvent;
 import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
@@ -40,9 +41,9 @@ public final class ClassicCombat implements Listener {
         }
     }
     private record Ground(double y, boolean limited) {}
-    private record JumpStamp(int tick) {}
     private record RodStamp(Settings settings, int tick, EntityDamageByEntityEvent damage, EntityKnockbackEvent knockback) {}
-    private record Pending(Settings settings, int tick, Vector velocity, EntityDamageByEntityEvent damage, boolean rod) {}
+    private record Pending(Settings settings, int tick, EntityDamageByEntityEvent damage,
+                           EntityKnockbackEvent knockback, boolean rod) {}
     private record VelocityGuard(Pending token, Vector velocity) {}
     private static final class RodScope {
         final Settings settings;
@@ -69,8 +70,7 @@ public final class ClassicCombat implements Listener {
     private final Map<UUID, LivingEntity> managed = new ConcurrentHashMap<>();
     private final Map<UUID, Hit> hits = new ConcurrentHashMap<>();
     private final Map<UUID, Ground> grounds = new ConcurrentHashMap<>();
-    private final Map<UUID, Boolean> grounded = new ConcurrentHashMap<>();
-    private final Map<UUID, JumpStamp> jumps = new ConcurrentHashMap<>();
+    private final ClassicJumpTracker jumps = new ClassicJumpTracker();
     private final Map<UUID, RodStamp> rodHits = new ConcurrentHashMap<>();
     private final Map<UUID, RodScope> activeRods = new ConcurrentHashMap<>();
     private final Map<UUID, Pending> pending = new ConcurrentHashMap<>();
@@ -100,7 +100,6 @@ public final class ClassicCombat implements Listener {
         Settings config = settings.get();
         if (!config.classicEnabled() || !eligible(entity, config)) { restore(entity); return; }
         managed.put(entity.getUniqueId(), entity);
-        grounded.putIfAbsent(entity.getUniqueId(), entity.isOnGround());
         var data = entity.getPersistentDataContainer();
         if (entity instanceof Player) {
             var speed = entity.getAttribute(Attribute.ATTACK_SPEED);
@@ -120,6 +119,7 @@ public final class ClassicCombat implements Listener {
         }
     }
     private void restore(LivingEntity entity) {
+        jumps.clear(entity.getUniqueId());
         if (entity instanceof Player) {
             var speed = entity.getAttribute(Attribute.ATTACK_SPEED);
             if (speed != null && speed.getModifier(speedKey) != null) speed.removeModifier(speedKey);
@@ -136,7 +136,7 @@ public final class ClassicCombat implements Listener {
         managed.remove(entity.getUniqueId(), entity);
     }
     public void refreshAll() {
-        hits.clear(); pending.clear(); velocityEvents.clear(); prepared.clear(); grounds.clear(); grounded.clear(); jumps.clear(); rodHits.clear();
+        hits.clear(); pending.clear(); velocityEvents.clear(); prepared.clear(); grounds.clear(); jumps.clear(); rodHits.clear();
         Set<LivingEntity> entities = new HashSet<>(managed.values());
         entities.addAll(Bukkit.getOnlinePlayers());
         for (LivingEntity entity : entities) entity.getScheduler().run(plugin, task -> reconcile(entity), null);
@@ -285,9 +285,9 @@ public final class ClassicCombat implements Listener {
         });
     }
     private boolean isJumpReset(LivingEntity victim, HitContext context, Vector before, int window) {
-        if (!(victim instanceof Player) || context.grounded() || before.getY() <= 0.05) return false;
-        JumpStamp stamp = jumps.get(victim.getUniqueId());
-        return stamp != null && within(stamp.tick(), victim.getTicksLived(), window + 1);
+        if (!(victim instanceof Player player) || !trackJump(player, settings.get())
+                || context.grounded() || before.getY() <= 0.05) return false;
+        return jumps.recent(player, window, settings.get());
     }
     public void prepare(EntityKnockbackEvent event, HitContext context, Settings config, Calculation calculation) {
         prepared.put(event, new Prepared(config, context, calculation));
@@ -300,7 +300,7 @@ public final class ClassicCombat implements Listener {
         if (value == null || event.isCancelled() || value.settings != settings.get()
                 || !(event.getEntity() instanceof LivingEntity victim) || !CombatTracker.owns(victim)) return;
         value.calculation.commit().run();
-        applied(victim, event.getKnockback(), value.settings, value.context);
+        applied(victim, value.settings, value.context, event);
     }
     private boolean heightLimited(LivingEntity victim, KnockbackProfile profile) {
         UUID id = victim.getUniqueId();
@@ -311,18 +311,28 @@ public final class ClassicCombat implements Listener {
         if (limited != ground.limited) grounds.put(id, new Ground(ground.y, limited));
         return limited;
     }
+    /** Compatibility signature; protection samples the applied entity motion when velocity is dispatched. */
     public void applied(LivingEntity victim, Vector impulse, Settings config, HitContext context) {
+        applied(victim, config, context, null);
+    }
+    private void applied(LivingEntity victim, Settings config, HitContext context, EntityKnockbackEvent knockback) {
         if (!config.classic().protectVelocityFromSync() || !(victim instanceof Player)) return;
         Hit hit = hits.get(victim.getUniqueId());
         boolean rod = context.type() == HitType.FISHING_ROD;
         RodScope scope = rodScope.get();
         EntityDamageByEntityEvent damage = rod
                 ? scope != null && scope.victim == victim ? scope.damage : null : hit == null ? null : hit.damage;
-        Pending value = new Pending(config, victim.getTicksLived(), victim.getVelocity().clone().add(impulse),
-                damage, rod);
+        Pending value = new Pending(config, victim.getTicksLived(), damage, knockback, rod);
         UUID id = victim.getUniqueId();
         pending.put(id, value);
         victim.getScheduler().runDelayed(plugin, task -> pending.remove(id, value), () -> pending.remove(id, value), rod ? 2 : 1);
+    }
+    private boolean valid(Pending value, Player victim) {
+        return value.settings == settings.get() && value.settings.classicEnabled()
+                && !players.get(victim.getUniqueId()).excluded()
+                && within(value.tick, victim.getTicksLived(), value.rod ? 2 : 1)
+                && (value.damage == null || !value.damage.isCancelled() && victim.getLastDamageCause() == value.damage)
+                && (value.knockback == null || !value.knockback.isCancelled());
     }
     @EventHandler(priority = EventPriority.LOWEST)
     public void beginVelocity(PlayerVelocityEvent event) {
@@ -330,14 +340,14 @@ public final class ClassicCombat implements Listener {
         if (!CombatTracker.owns(victim)) return;
         Pending value = pending.get(victim.getUniqueId());
         if (value == null) return;
-        boolean valid = value.settings == settings.get() && within(value.tick, victim.getTicksLived(), value.rod ? 2 : 1)
-                && (value.damage == null || !value.damage.isCancelled() && victim.getLastDamageCause() == value.damage);
-        if (!valid || event.isCancelled()) { pending.remove(victim.getUniqueId(), value); return; }
-        // Rod delivery is immediate in the plugin; compatibility callers may flush on the next tick.
-        // Preserve current rod motion rather than replaying a frozen collision vector.
-        velocityEvents.put(event, new VelocityGuard(value, value.rod ? victim.getVelocity().clone() : value.velocity.clone()));
+        if (!valid(value, victim) || event.isCancelled()) { pending.remove(victim.getUniqueId(), value); return; }
+        // Native melee events can contain the pre-hit motion; the entity already has the actual
+        // final KB. Capture it now, before sync, including later native/event changes and movement.
+        Vector current = victim.getVelocity().clone();
+        if (!KnockbackMath.finite(current)) { pending.remove(victim.getUniqueId(), value); return; }
+        velocityEvents.put(event, new VelocityGuard(value, current));
     }
-    /** Registered after soft-dependent KnockbackSync. No setVelocity call and no recursive event. */
+    /** Finish within this velocity dispatch; never defer or replay a previous hit's motion. */
     @EventHandler(priority = EventPriority.HIGHEST)
     public void velocity(PlayerVelocityEvent event) {
         Player victim = event.getPlayer();
@@ -347,7 +357,13 @@ public final class ClassicCombat implements Listener {
         // A nested hit can replace the pending token during another plugin's velocity handler.
         // The earlier event must neither replay its rod vector nor consume the new melee token.
         boolean current = pending.remove(victim.getUniqueId(), value.token);
-        if (!event.isCancelled() && current && value.token.settings == settings.get()) event.setVelocity(value.velocity);
+        if (!event.isCancelled() && current && valid(value.token, victim)) {
+            event.setVelocity(value.velocity);
+            // KnockbackSync can change entity motion directly. Native dispatch only copies the
+            // event back when it differs from its initial value, so equal vectors need this too.
+            // Consume the token first; supported cores' setVelocity does not fire another event.
+            if (!victim.getVelocity().equals(value.velocity)) victim.setVelocity(value.velocity.clone());
+        }
     }
     public enum RodResult { INACTIVE, REJECTED, APPLIED }
     /** Compatibility entry point: true means classic owns the collision, not that KB was accepted. */
@@ -484,20 +500,37 @@ public final class ClassicCombat implements Listener {
         RodScope rod = rodScope.get();
         if (rod != null && rod.damaging && event.getEntity() == rod.victim) event.setCancelled(true);
     }
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    private boolean trackJump(Player player, Settings config) {
+        if (!CombatTracker.owns(player)) return false;
+        boolean allowed = config.classicEnabled() && config.classic().jumpResetEnabled()
+                && !players.get(player.getUniqueId()).excluded() && tracker.kind(player) == CombatantKind.PLAYER
+                && !player.isFlying() && !player.isGliding() && !player.isInsideVehicle() && !player.isSwimming();
+        if (!allowed) jumps.clear(player.getUniqueId());
+        return allowed;
+    }
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void jump(PlayerJumpEvent event) {
+        Settings config = settings.get();
+        if (trackJump(event.getPlayer(), config)) jumps.jump(event, config);
+    }
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void input(PlayerInputEvent event) {
+        if (trackJump(event.getPlayer(), settings.get())) jumps.input(event);
+    }
+    @EventHandler(priority = EventPriority.MONITOR)
     public void move(PlayerMoveEvent event) {
         if (event instanceof PlayerTeleportEvent) return;
-        if (!settings.get().classicEnabled()) return;
         Player player = event.getPlayer();
+        if (!CombatTracker.owns(player)) return;
         UUID id = player.getUniqueId();
-        boolean onGround = player.isOnGround();
-        Boolean wasGround = grounded.put(id, onGround);
-        if (onGround) {
-            grounds.put(id, new Ground(event.getTo().getY(), false));
-            jumps.remove(id);
-        } else if (Boolean.TRUE.equals(wasGround) && player.getVelocity().getY() > 0.05) {
-            jumps.put(id, new JumpStamp(player.getTicksLived()));
+        Settings config = settings.get();
+        if (!config.classicEnabled() || !eligible(player, config)) {
+            grounds.remove(id); jumps.clear(id); return;
         }
+        if (trackJump(player, config)) jumps.move(event);
+        if (event.isCancelled()) return;
+        boolean onGround = player.isOnGround();
+        if (onGround) grounds.put(id, new Ground(event.getTo().getY(), false));
     }
     @EventHandler public void join(PlayerJoinEvent event) { reconcile(event.getPlayer()); }
     @EventHandler public void added(com.destroystokyo.paper.event.entity.EntityAddToWorldEvent event) {
@@ -516,7 +549,7 @@ public final class ClassicCombat implements Listener {
         UUID id = event.getEntity().getUniqueId();
         clear(id); managed.remove(id);
     }
-    private void clear(UUID id) { hits.remove(id); pending.remove(id); grounds.remove(id); grounded.remove(id); jumps.remove(id); rodHits.remove(id); }
+    private void clear(UUID id) { hits.remove(id); pending.remove(id); grounds.remove(id); jumps.clear(id); rodHits.remove(id); }
     public long preventedHits() { return preventedHits.sum(); }
     public long preventedComponents() { return preventedComponents.sum(); }
     public long applied() { return applied.sum(); }
@@ -524,6 +557,6 @@ public final class ClassicCombat implements Listener {
         // Paper owns all entities here. Folia disallows scheduling new plugin tasks during disable;
         // persistent immunity markers are recovered on the next enable/join, modifiers are transient.
         for (LivingEntity entity : new ArrayList<>(managed.values())) if (CombatTracker.owns(entity)) restore(entity);
-        hits.clear(); pending.clear(); velocityEvents.clear(); prepared.clear(); grounds.clear(); grounded.clear(); jumps.clear(); rodHits.clear(); managed.clear(); rodScope.remove();
+        hits.clear(); pending.clear(); velocityEvents.clear(); prepared.clear(); grounds.clear(); jumps.clear(); rodHits.clear(); managed.clear(); rodScope.remove();
     }
 }

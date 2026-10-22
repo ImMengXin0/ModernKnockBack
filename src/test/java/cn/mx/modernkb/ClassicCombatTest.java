@@ -260,6 +260,8 @@ public class ClassicCombatTest {
     }
     @Test public void classicFinalVelocitySurvivesSyncButModernDoesNotUseClassicProtection() {
         classic.acceptedDamage(damage()); var knockback = knockback(); listener.knockback(knockback); classic.finishedKnockback(knockback);
+        // Native knockback applies the event delta before PlayerVelocityEvent is dispatched.
+        when(victim.getVelocity()).thenReturn(new Vector(0.4, 0.36075, 0));
         var event = new PlayerVelocityEvent(victim, new Vector()); classic.beginVelocity(event);
         event.setVelocity(new Vector(0.4, 7, 0)); classic.velocity(event);
         assertEquals(new Vector(0.4, 0.36075, 0), event.getVelocity());
@@ -445,6 +447,7 @@ public class ClassicCombatTest {
         var rodPacket = new PlayerVelocityEvent(victim, new Vector()); classic.beginVelocity(rodPacket);
         classic.acceptedDamage(damage());
         var sword = knockback(); listener.knockback(sword); classic.finishedKnockback(sword);
+        when(victim.getVelocity()).thenReturn(new Vector(0.4, 0.36075, 0));
         rodPacket.setVelocity(new Vector(0.2, 0.25, 0)); classic.velocity(rodPacket);
         assertEquals(new Vector(0.2, 0.25, 0), rodPacket.getVelocity());
         var swordPacket = new PlayerVelocityEvent(victim, new Vector()); classic.beginVelocity(swordPacket);
@@ -807,6 +810,7 @@ public class ClassicCombatTest {
             assertEquals(index == 4 ? 0.4 : 0.9, after.getX(), 1e-12);
             assertEquals(index == 4 ? 0.36075 : 0.46075, after.getY(), 1e-12);
             assertEquals(0, after.getZ(), 1e-12);
+            when(victim.getVelocity()).thenReturn(after);
             var extra = knockback(); listener.knockback(extra); assertTrue(extra.isCancelled());
             var packet = new PlayerVelocityEvent(victim, new Vector(0.4, 8, 0));
             classic.beginVelocity(packet); classic.velocity(packet); assertEquals(after, packet.getVelocity());
@@ -825,8 +829,14 @@ public class ClassicCombatTest {
         verify(scheduler, never()).run(any(), any(), any());
     }
     @Test public void recentPlayerJumpIsRecognizedAsJumpResetByClassicCalculation() {
-        when(victim.isOnGround()).thenReturn(true, false);
+        when(victim.isOnGround()).thenReturn(true);
         classic.reconcile(victim);
+        org.bukkit.Input input = mock(org.bukkit.Input.class);
+        when(input.isJump()).thenReturn(true);
+        classic.input(new org.bukkit.event.player.PlayerInputEvent(victim, input));
+        classic.jump(new com.destroystokyo.paper.event.player.PlayerJumpEvent(victim,
+                new Location(null, 1, 64, 0), new Location(null, 1, 64.1, 0)));
+        when(victim.isOnGround()).thenReturn(false);
         when(victim.getVelocity()).thenReturn(new Vector(0.8, 0.42, -0.2));
         classic.move(new org.bukkit.event.player.PlayerMoveEvent(victim,
                 new Location(null, 1, 64, 0), new Location(null, 1, 64.1, 0)));

@@ -1,4 +1,4 @@
-# ModernKnockBack 2.0.3
+# ModernKnockBack 2.0.4
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -23,7 +23,9 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.3.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.4.jar`。
+
+2.0.4 优化 classic 技巧与同步一致性：jump reset 需同时具有跳跃输入、跳跃事件和成功移动，避免把普通击飞认作跳跃；修复 KnockbackSync 直接改实体速度时的保护遗漏，发包时保留实际运动状态，并拦截已取消或过期的击退记录。W-tap/S-tap 按收到的疾跑动作生效，strafe 保持方向对称；不按 ping 加力或延长受击窗口。数值和配置项保持不变，说明及实服复测表见 [Classic 技巧与延迟](docs/CLASSIC-TECHNIQUES.md)。
 
 2.0.3 在 classic 中保留命中后的鱼钩与钓线，命中后轻微回弹下落，收杆间隔从实际收杆开始计算；每枚鱼钩只触发一次受击。同时屏蔽横扫剑气粒子，沿用2.0.2的横扫消音。普通近战仍使用原生3.0格距离，无新增配置项。无需删除已有配置；验证范围见 [验证记录](docs/VERIFICATION.md)。
 

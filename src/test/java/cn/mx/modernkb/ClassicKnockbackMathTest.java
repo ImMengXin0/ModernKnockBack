@@ -95,6 +95,78 @@ public class ClassicKnockbackMathTest {
         assertEquals(new Vector(0.4, 0.24775, 0), ordinary);
         assertEquals(new Vector(0.8, 0.45775, -0.1), reset);
     }
+    @Test public void mirroredStrafesHaveEqualStrengthWhenTheWholeFightRotates() {
+        var profile = KnockbackMathTest.profile();
+        var hit = KnockbackMathTest.hit(HitType.MELEE, true, true, false, 1, false);
+        for (double angle : new double[]{0, 0.3, Math.PI / 2, Math.PI, 4.7})
+            for (int side : new int[]{-1, 1}) {
+                // Mirrored positions around the attacker's facing, rotated together in world space.
+                Vector direction = rotate(new Vector(3, 0, side * 4), angle);
+                Vector facing = rotate(new Vector(1, 0, 0), angle);
+                Vector before = rotate(new Vector(-0.7, 0.1, side * 0.8), angle);
+                var attack = new ClassicKnockbackMath.Attack(direction, facing, true, 0, 0, 1);
+                Vector after = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                        profile, attack, 0, false));
+                Vector local = rotate(after, -angle);
+                assertEquals(0.54, local.getX(), 1e-12);
+                assertEquals(side * 0.72, local.getZ(), 1e-12);
+                assertEquals(0.46075, local.getY(), 1e-12);
+                assertEquals(0.9, Math.hypot(after.getX(), after.getZ()), 1e-12);
+            }
+    }
+    @Test public void zeroRetentionCannotAccumulateSidewaysDriftDuringAChangingDirectionCombo() {
+        var profile = KnockbackMathTest.profile("classic.horizontal-retention", 0.0,
+                "classic.vertical-retention", 0.0);
+        Vector before = new Vector(1.1, 0.42, -0.9);
+        for (int index = 0; index < 24; index++) {
+            double angle = index * 0.37;
+            Vector forward = rotate(new Vector(1, 0, 0), angle);
+            Vector sideways = rotate(new Vector(0, 0, 1), angle);
+            boolean sprint = index % 3 != 0, ground = index % 4 == 0;
+            var hit = KnockbackMathTest.hit(HitType.MELEE, ground, sprint, index % 2 == 0, 0, false);
+            var attack = new ClassicKnockbackMath.Attack(forward.clone().multiply(2), sideways,
+                    sprint, 0, 0, 1);
+            Vector previous = before.clone();
+            Vector after = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                    profile, attack, 0, false));
+            assertEquals(sprint ? 0.9 : 0.4, after.dot(forward), 1e-12);
+            assertEquals(0, after.dot(sideways), 1e-12);
+            assertEquals((ground ? 0.36075 : 0.24775) + (sprint ? 0.1 : 0), after.getY(), 1e-12);
+            assertEquals(previous, before);
+            // Between accepted hits, the victim strafes and gravity changes its motion.
+            before = after.clone().add(sideways.clone().multiply(index % 2 == 0 ? 0.3 : -0.3));
+            before.setY(before.getY() - 0.18);
+        }
+    }
+    @Test public void jumpResetRetainsExactlyHalfOfMirroredStrafeMomentumAtEveryHeading() {
+        var profile = KnockbackMathTest.profile();
+        var hit = KnockbackMathTest.hit(HitType.MELEE, false, false, false, 1, false);
+        for (double angle : new double[]{0, 0.3, Math.PI / 2, Math.PI, 4.7})
+            for (double forwardSpeed : new double[]{-0.8, 0, 0.8})
+                for (int side : new int[]{-1, 1}) {
+                    Vector before = rotate(new Vector(forwardSpeed, 0.42, side * 0.2), angle);
+                    Vector direction = rotate(new Vector(1, 0, 0), angle);
+                    var attack = new ClassicKnockbackMath.Attack(direction, direction.clone(),
+                            false, 0, 0, 1);
+                    Vector ordinary = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                            profile, attack, 0, false, false));
+                    Vector reset = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                            profile, attack, 0, false, true));
+                    Vector retained = reset.clone().subtract(ordinary);
+                    assertEquals(before.getX() * 0.5, retained.getX(), 1e-12);
+                    assertEquals(before.getY() * 0.5, retained.getY(), 1e-12);
+                    assertEquals(before.getZ() * 0.5, retained.getZ(), 1e-12);
+                    Vector local = rotate(reset, -angle);
+                    assertEquals(0.4 + forwardSpeed * 0.5, local.getX(), 1e-12);
+                    assertEquals(side * 0.1, local.getZ(), 1e-12);
+                    assertEquals(0.45775, local.getY(), 1e-12);
+                }
+    }
+    private static Vector rotate(Vector vector, double angle) {
+        double cosine = Math.cos(angle), sine = Math.sin(angle);
+        return new Vector(vector.getX() * cosine - vector.getZ() * sine, vector.getY(),
+                vector.getX() * sine + vector.getZ() * cosine);
+    }
     @Test public void overlappingMeleeDirectionDependsOnYawNotTinyOffsetsHeightOrCriticalFlag() {
         for (boolean critical : new boolean[]{false, true})
             for (boolean grounded : new boolean[]{false, true})

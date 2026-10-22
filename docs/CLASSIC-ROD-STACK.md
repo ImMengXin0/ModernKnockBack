@@ -1,4 +1,4 @@
-# Classic 鱼竿命中与受击保护（2.0.3）
+# Classic 鱼竿命中与受击保护（2.0.4）
 
 只修改 ModernKnockBack，不改核心、ThePit 或旧 KnockbackManager。classic 的近战仍使用原生攻击目标/距离，不恢复挥空补刀。
 
@@ -57,7 +57,7 @@ rod-melee-interval-ticks: 10
 
 继续保留：防挂脸/拉回、立即速度通知、classic 向量保护、玩家 UUID 排除互推、无挥空补刀。客户端队伍副本不修改真实计分板。保留的鱼钩不在后续接触中再次对生物触发受击；钓鱼和物品处理仍走原生流程。
 
-替换为 `ModernKnockBack-2.0.3.jar` 后正常重启，无需删除配置。用 `/kbtest classic` 与 `/mkb status` 确认模式和实际间隔。建议在目标服务器检验：
+替换为 `ModernKnockBack-2.0.4.jar` 后正常重启，无需删除配置。用 `/kbtest classic` 与 `/mkb status` 确认模式和实际间隔。建议在目标服务器检验：
 
 1. 近距离向左右横移玩家连续出杆，比较正中、擦边与明显偏离；隔墙不能命中。
 2. 快速连杆并立即切刀，T+10 之前不产生第二次 KB；持续出杆不延长首次保护窗口。

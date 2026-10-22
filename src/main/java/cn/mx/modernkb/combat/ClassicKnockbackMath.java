@@ -16,8 +16,8 @@ public final class ClassicKnockbackMath {
         return impulse(before, hit, profile, attack, resistance, heightLimited, false);
     }
     /**
-     * Classic jump-reset handling keeps the same old 1.8-style half of the velocity that
-     * existed when a player jumped into a hit. It is a state flag, not another KB multiplier.
+     * The classic jump-reset policy retains half the existing motion for a confirmed jump.
+     * It is a state flag, not another KB multiplier or a full legacy physics simulation.
      */
     public static Vector impulse(Vector before, HitContext hit, KnockbackProfile profile, Attack attack,
                                  double resistance, boolean heightLimited, boolean jumpReset) {

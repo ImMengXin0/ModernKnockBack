@@ -37,7 +37,7 @@ classic 默认 `stop_sprint: false`，与旧 KnockbackManager 的同名字段一
 
 需要关闭疾跑重置时，将服务器 classic/combat.yml 中的 `reset-sprint-on-hit: true` 替换为 `stop_sprint: false`，再执行 `/mkb reload`。也可将旧字段改为 false。旧字段兼容为同义别名，两个值相互矛盾时校验失败，不改变当前模式；已有值不会自动覆盖。
 
-`jump-reset-enabled: true` 时，插件追踪玩家最近一次由落地转为空中的状态。命中发生在 `jump-reset-window-ticks`（默认 2 tick）内且玩家仍有向上速度时，classic 保留命中前水平与垂直速度的至少一半，再叠加同样的经典推力。它不会改变 0.4、0.36075、0.24775 等主要 KB 参数，也不会把普通空中移动误判为 jump reset；非 Player 的 Bot 不读取客户端跳跃技巧。
+`jump-reset-enabled: true` 时，2.0.4 起同时核对跳跃输入、Paper 跳跃事件和对应的成功移动。单纯离地或正向 Y 速度不能建立 jump reset；被取消或重定向的移动、飞行/滑翔/游泳/载具和 Bot 不使用该技巧。输入与移动在同 tick 内先后到达均可识别，后续松开跳跃键不取消已成功的起跳；下一 tick 新按的跳跃不能追溯改变之前的击飞。命中发生在 `jump-reset-window-ticks`（默认 2 tick，含边界）内且玩家仍有向上速度时，classic 保留命中前水平与垂直速度的至少一半，再叠加经典推力。它不改变主要 KB 参数。客户端未提供跳跃输入时采用普通空中向量；该规则是技巧模拟，不是完整 1.8 物理还原。
 
 同一受击者共享窗口，防止更高伤害绕过原生免疫造成叠刀。攻击前先拦截，伤害事件兜底；不会逐击清空 noDamageTicks 或延迟重放速度。默认取消横扫伤害和横扫 KB，让刀剑攻击只处理目标。
 
@@ -64,7 +64,7 @@ Paper delta = finalVelocity - beforeVelocity
 | 最终垂直上限 | 0.5 |
 | 高度锁定 | 默认关闭，空中 Y 不依赖上一次连击高度 |
 | 疾跑重置 | `combat.yml` 默认 `stop_sprint: false`；客户端仍处于疾跑时保留下一刀附加 |
-| jump reset | `combat.yml` 默认开启；最近 2 tick 起跳且有向上速度时保留至少半动量 |
+| jump reset | `combat.yml` 默认开启；输入及移动确认的最近 2 tick 起跳、有向上速度时保留至少半动量 |
 
 旧天坑代码直接覆盖旧速度，默认动量保留 0。1.2.1 默认配置将主要 KB 参数从 14 项缩为 5 项：classic.horizontal、vertical-ground、vertical-air、sprint-horizontal、sprint-vertical。horizontal 同时指定地面和空中水平；每个 profile 可独立覆盖。classic 计算不再套用通用 horizontal/vertical、modern 倍率或 limits 增量限幅；这些字段继续供现代/未使用 classic 公式的事件路径使用。抗击退默认保留，自算推力只缩放一次。
 
@@ -100,7 +100,9 @@ fishing_rod 的推荐默认为抛投间隔 2 tick、收杆后间隔 0 tick、水
 
 ## KnockbackSync 与 Modern
 
-modern 读取 modern/config.yml 的 preserve-y 策略，蓄力、附魔、抗性、native/增量计算继续走现代路径。classic/combat.yml 的 protect-velocity-from-sync 默认 true，仅对本插件确认的经典命中保护 PlayerVelocityEvent 中的完整速度，避免常规 KBS 垂直补偿覆盖 classic Y。MKB 通过 softdepend 在 KBS 后注册，以 HIGHEST 处理，不更改 KBS 文件或全局启用状态，也不递归 setVelocity 补发。stop_sprint 的客户端状态路径只在 classic 生效；jump reset 只在 classic 的近战向量中生效。
+modern 读取 modern/config.yml 的 preserve-y 策略，蓄力、附魔、抗性、native/增量计算继续走现代路径。classic/combat.yml 的 protect-velocity-from-sync 默认 true，仅对本插件确认的经典命中保护当前速度，避免常规 KBS 垂直补偿覆盖 classic Y。2.0.4 在 PlayerVelocityEvent 开始时捕获实体已经应用的实际速度，结束时复核原伤害、KB事件、模式、排除状态与本次记录。保护事件向量，并在同步插件直接改了实体速度时立即恢复一次；相同速度不重复写入，不在后续 tick 重放。所支持核心的 setVelocity 不递归派发该事件。这样也保留了其他监听器对最终 KB 的修改，而非恢复较早的计算快照。
+
+MKB 通过 softdepend 在 KBS 后注册，以 HIGHEST 完成本次保护，不更改 KBS 文件或全局启用状态。stop_sprint 的客户端状态路径只在 classic 生效；jump reset 只在 classic 的近战向量中生效。不同 ping 使用相同推力和受击窗口，按服务器已收到的有效状态处理；不补造命中或回溯移动。技巧关系、验证边界与对打复测见 [Classic 技巧与延迟](CLASSIC-TECHNIQUES.md)。
 
 保护不恢复被取消的速度事件。其他插件若在 MONITOR 或发包阶段强行覆盖，仍可能改变结果。此版本未进行真实 KBS 联机对战，需在目标构建验收；Folia 需搭配支持 Folia 的 KBS。
 
