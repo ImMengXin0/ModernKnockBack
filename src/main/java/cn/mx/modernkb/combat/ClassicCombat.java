@@ -51,6 +51,7 @@ public final class ClassicCombat implements Listener {
         final Settings settings;
         final FishHook hook;
         final LivingEntity victim;
+        final UUID victimId;
         final ClassicKnockbackMath.Attack attack;
         EntityDamageByEntityEvent damage;
         EntityKnockbackEvent knockback;
@@ -58,7 +59,8 @@ public final class ClassicCombat implements Listener {
         boolean applied;
         int immunityWindow = -1;
         RodScope(Settings settings, FishHook hook, LivingEntity victim, ClassicKnockbackMath.Attack attack) {
-            this.settings = settings; this.hook = hook; this.victim = victim; this.attack = attack;
+            this.settings = settings; this.hook = hook; this.victim = victim;
+            this.victimId = victim.getUniqueId(); this.attack = attack;
         }
     }
     private record Prepared(Settings settings, HitContext context, Calculation calculation) {}
@@ -477,20 +479,22 @@ public final class ClassicCombat implements Listener {
             boolean sent;
             try {
                 sent = currentHit.getAsBoolean()
-                        && (!(victim instanceof Player player) || rodVelocity.deliver(player, previousVelocity, currentHit));
+                        && (!(victim instanceof Player player) || rodVelocity.deliver(player, previousVelocity, currentHit, () -> {
+                            if (!currentHit.getAsBoolean() || current.damage.getDamage() != 0
+                                    || current.damage.getFinalDamage() != 0) return;
+                            // After velocity listeners accept this hit, start the red hurt flash before
+                            // the motion packet, in the same tick. CraftBukkit adds 90 degrees.
+                            victim.playHurtAnimation(-90f);
+                            if (!currentHit.getAsBoolean()) return;
+                            var sound = victim.getHurtSound();
+                            if (sound != null) victim.getWorld().playSound(victim, sound, SoundCategory.PLAYERS, 1, 1);
+                        }));
             } catch (RuntimeException | Error failure) {
                 discardRod(current, previousImmunity, previousDamage);
                 throw failure;
             }
             if (sent) {
                 ClassicRodContact.attach(hook, victim, plugin, currentHit);
-                if (currentHit.getAsBoolean() && victim instanceof Player
-                        && current.damage.getDamage() == 0 && current.damage.getFinalDamage() == 0) {
-                    // CraftBukkit adds 90 degrees; native yaw 0 matches the fixed 1.8 tilt.
-                    victim.playHurtAnimation(-90f);
-                    var sound = victim.getHurtSound();
-                    if (sound != null) victim.getWorld().playSound(victim, sound, SoundCategory.PLAYERS, 1, 1);
-                }
                 return RodResult.APPLIED;
             }
         }
@@ -499,19 +503,20 @@ public final class ClassicCombat implements Listener {
     }
     private void discardRod(RodScope current, int previousImmunity, double previousDamage) {
         LivingEntity victim = current.victim;
+        UUID id = current.victimId;
         Settings config = current.settings;
         // Remove only this rod's state, never a newer hit installed by a nested listener.
-        rodHits.computeIfPresent(victim.getUniqueId(), (id, stamp) ->
+        rodHits.computeIfPresent(id, (key, stamp) ->
                 stamp.settings == config && stamp.damage == current.damage ? null : stamp);
-        if (settings.get() == config && current.damage != null && victim.getLastDamageCause() == current.damage
+        if (CombatTracker.owns(victim) && settings.get() == config && current.damage != null && victim.getLastDamageCause() == current.damage
                 && current.damage.getDamage() == 0 && current.damage.getFinalDamage() == 0
                 && current.immunityWindow >= 0 && victim.getNoDamageTicks() == current.immunityWindow) {
             victim.setNoDamageTicks(previousImmunity);
             victim.setLastDamage(previousDamage);
         }
-        Pending value = pending.get(victim.getUniqueId());
+        Pending value = pending.get(id);
         if (value != null && value.settings == config && value.rod && value.damage == current.damage)
-            pending.remove(victim.getUniqueId(), value);
+            pending.remove(id, value);
     }
     private void detachHook(FishHook hook) {
         if (hook == null || !CombatTracker.owns(hook)) return;

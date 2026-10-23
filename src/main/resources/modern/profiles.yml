@@ -1,4 +1,4 @@
-# ModernKnockBack 2.0.5：快节奏现代 PvP 试用预设
+# ModernKnockBack 2.0.6：快节奏现代 PvP 试用预设
 # 倍率不是击退距离，也不是延迟参数；仍需实服对战确认手感。
 defaults:
   enabled: true

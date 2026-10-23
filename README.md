@@ -1,4 +1,4 @@
-# ModernKnockBack 2.0.5
+# ModernKnockBack 2.0.6
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -16,7 +16,7 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 - 鱼竿抛投间隔、收杆间隔、飞行速度、距离、存活时间，以及可选碰撞击退。
 - classic 鱼钩命中发起真实 0 伤害投射物受击，支持受击动画、声音及经典向量；收杆取消玩家/生物拉回。
 - classic 成功命中后鱼钩挂住目标，仅对被钩玩家隐藏，出杆者与旁观者保留鱼钩和钓线；取消或免疫命中不挂钩。右键正常收回，不拉回目标，同一枚鱼钩只接触一次。
-- classic 本人受击改用旧版固定方向晃动，保留受伤动画；不改玩家朝向。先发送鱼竿速度，再隐藏/挂钩和播放受击效果。
+- classic 本人受击改用旧版固定方向晃动，保留受伤动画；不改玩家朝向。鱼竿命中确认后先发送红闪动画与声音，再立即发送速度，最后隐藏/挂钩；同 tick 完成。
 - classic 连续鱼竿及竿接刀遵守完整受击窗口，默认 10 tick；固定 0.3 格鱼钩碰撞余量，改善近距离横移目标漏判。
 - classic 保留原生命中目标和攻击距离，不再根据挥手包补刀或扩大命中边缘；使用玩家 UUID 排除实体互推，保留鱼钩/箭的碰撞资格，modern 恢复原规则。
 - classic 屏蔽横扫攻击音效与剑气粒子，支持普通包及组合包；modern 和排除玩家恢复原效果。
@@ -24,7 +24,9 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.5.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.6.jar`。
+
+2.0.6 调整 classic 鱼竿受击反馈顺序：伤害、KB及最终速度事件确认有效后，先发送受击红闪与单次声音，再立即发送击退速度，最后隐藏并附着鱼钩。修复先挂钩导致反馈后置、隐藏事件重入可能跳过反馈的问题。沿用原有受击动画包，无需扣血或修改核心；不增加等待、定身或新配置。已有 KB 数值和防叠刀规则保留，客户端画面仍需联机复测。
 
 2.0.5 修复 classic 受击的定向镜头倾斜和鱼钩回弹观感：仅把本人受击包角度归零；成功鱼钩改为原生挂载并对受击者隐藏。修复 Leaf 开启 `flush-location-while-knockback-player` 时，同一击第二次速度事件可再次被同步插件改写的问题，限定保护原生同步调用中的那一次事件。保留原 KB 数值、受击间隔及技巧，不重放速度、不修改核心。升级正常重启即可；实际客户端手感与网络延迟仍须联机复测，详见 [视角、鱼钩与同步说明](docs/CLASSIC-FEEL.md)。
 

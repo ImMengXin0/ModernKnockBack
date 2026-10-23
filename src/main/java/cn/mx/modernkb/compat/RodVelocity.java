@@ -8,17 +8,38 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerVelocityEvent;
 import org.bukkit.util.Vector;
 
-/** Flush one accepted rod velocity on the victim region, before sending the hurt animation. */
+/** Flush one accepted rod velocity on the victim region. */
 @FunctionalInterface
 public interface RodVelocity {
     boolean deliver(Player player, Vector before, BooleanSupplier current);
 
+    /**
+     * Runs zero-damage visual feedback only after the hit has been accepted. Implementations
+     * supplied by this plugin run it before sending motion. Existing three-argument custom
+     * implementations remain compatible, but this fallback can only run feedback after delivery.
+     * The callback must not cause another damage event.
+     */
+    default boolean deliver(Player player, Vector before, BooleanSupplier current, Runnable acceptedFeedback) {
+        if (!deliver(player, before, current)) return false;
+        if (current.getAsBoolean()) acceptedFeedback.run();
+        return true;
+    }
+
     /** Compatibility for callers that use ClassicCombat independently of the plugin bootstrap. */
     static RodVelocity deferred() {
-        return (player, before, current) -> {
-            if (!current.getAsBoolean()) return false;
-            player.setVelocity(player.getVelocity());
-            return true;
+        return new RodVelocity() {
+            @Override public boolean deliver(Player player, Vector before, BooleanSupplier current) {
+                if (!current.getAsBoolean()) return false;
+                player.setVelocity(player.getVelocity());
+                return true;
+            }
+            @Override public boolean deliver(Player player, Vector before, BooleanSupplier current, Runnable acceptedFeedback) {
+                if (!current.getAsBoolean()) return false;
+                acceptedFeedback.run();
+                if (!current.getAsBoolean()) return false;
+                player.setVelocity(player.getVelocity());
+                return true;
+            }
         };
     }
 
@@ -28,19 +49,27 @@ public interface RodVelocity {
     }
 
     static RodVelocity immediate(Transport transport) {
-        return (player, before, current) -> {
-            if (!CombatTracker.owns(player) || !current.getAsBoolean()) return false;
-            var event = new PlayerVelocityEvent(player, player.getVelocity().clone());
-            Bukkit.getPluginManager().callEvent(event);
-            // A nested hit or mode change owns its new velocity. Never overwrite or clear it.
-            if (!current.getAsBoolean()) return false;
-            if (event.isCancelled()) {
-                transport.discard(player, before);
-                return false;
+        return new RodVelocity() {
+            @Override public boolean deliver(Player player, Vector before, BooleanSupplier current) {
+                return deliver(player, before, current, () -> {});
             }
-            event.getVelocity().checkFinite();
-            transport.send(player, event.getVelocity());
-            return true;
+            @Override public boolean deliver(Player player, Vector before, BooleanSupplier current, Runnable acceptedFeedback) {
+                if (!CombatTracker.owns(player) || !current.getAsBoolean()) return false;
+                var event = new PlayerVelocityEvent(player, player.getVelocity().clone());
+                Bukkit.getPluginManager().callEvent(event);
+                // A nested hit or mode change owns its new velocity. Never overwrite or clear it.
+                if (!CombatTracker.owns(player) || !current.getAsBoolean()) return false;
+                if (event.isCancelled()) {
+                    transport.discard(player, before);
+                    return false;
+                }
+                event.getVelocity().checkFinite();
+                acceptedFeedback.run();
+                // Packet listeners can cause another hit or move the player to a different region.
+                if (!CombatTracker.owns(player) || !current.getAsBoolean()) return false;
+                transport.send(player, event.getVelocity());
+                return true;
+            }
         };
     }
 

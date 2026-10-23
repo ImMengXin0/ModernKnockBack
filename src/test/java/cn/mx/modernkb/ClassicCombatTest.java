@@ -55,8 +55,9 @@ public class ClassicCombatTest {
             accessStatic.when(RegistryAccess::registryAccess).thenReturn(access);
             var registryEntries = new HashMap<String, Keyed>();
             org.mockito.stubbing.Answer<Object> registries = call -> {
-                Class<?> entryType = call.getArgument(0) == DamageType.class || call.getArgument(0) == RegistryKey.DAMAGE_TYPE
-                        ? DamageType.class : Attribute.class;
+                Object key = call.getArgument(0);
+                Class<?> entryType = key == DamageType.class || key == RegistryKey.DAMAGE_TYPE ? DamageType.class
+                        : key == Sound.class || key == RegistryKey.SOUND_EVENT ? Sound.class : Attribute.class;
                 return new Registry<Keyed>() {
                 @Override public Keyed get(NamespacedKey key) {
                     return registryEntries.computeIfAbsent(entryType.getName() + "/" + key,
@@ -83,6 +84,7 @@ public class ClassicCombatTest {
             doAnswer(registries).when(access).getRegistry(any(RegistryKey.class));
             assertNotNull(Attribute.ATTACK_SPEED);
             assertNotNull(DamageType.THROWN);
+            assertNotNull(Sound.ENTITY_PLAYER_HURT);
         }
     }
     @Before public void setup() {
@@ -480,11 +482,11 @@ public class ClassicCombatTest {
         var order = inOrder(victim, hook);
         order.verify(victim).knockback(anyDouble(), anyDouble(), anyDouble());
         order.verify(hook).setHookedEntity(null); order.verify(hook).setVelocity(new Vector(0, -0.05, 0));
+        order.verify(victim).playHurtAnimation(-90f);
         order.verify(victim).setVelocity(any());
         order.verify(victim).hideEntity(plugin, hook);
         order.verify(hook).setHookedEntity(victim);
         order.verify(hook).setVelocity(new Vector());
-        order.verify(victim).playHurtAnimation(-90f);
         verify(attacker, never()).hideEntity(any(), any());
         verify(victim).setNoDamageTicks(20); verify(victim).setLastDamage(0);
         verify(victim, never()).setNoDamageTicks(0); verify(victim, never()).setHealth(anyDouble());
@@ -660,11 +662,16 @@ public class ClassicCombatTest {
         assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, mob, 0.4));
         assertEquals(20, remaining.get()); verify(mob, never()).setNoDamageTicks(0);
     }
-    @Test public void immediateRodSendsBeforeAttachingAndHurtAndProtectsVelocityOnce() {
+    @Test public void immediateRodSendsHurtThenMotionThenAttachesAndProtectsVelocityOnce() {
         RodVelocity.Transport transport = mock(RodVelocity.Transport.class);
         classic = new ClassicCombat(plugin, () -> settings, store, tracker, RodVelocity.immediate(transport));
         listener = new KnockbackListener(() -> settings, store, tracker, () -> true, classic);
         FishHook hook = rodHook(); rodDamage(hook, event -> {});
+        Sound sound = Sound.ENTITY_PLAYER_HURT;
+        World world = mock(World.class);
+        when(victim.getHurtSound()).thenReturn(sound);
+        when(victim.getWorld()).thenReturn(world);
+        when(hook.getWorld()).thenReturn(world);
         Vector actual = new Vector(0.5, 0.34, 0);
         doAnswer(call -> {
             var event = new EntityKnockbackEvent(victim, EntityKnockbackEvent.Cause.UNKNOWN, actual);
@@ -680,12 +687,18 @@ public class ClassicCombatTest {
             return null;
         }).when(manager).callEvent(isA(PlayerVelocityEvent.class));
         assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, victim, 0.4));
-        var order = inOrder(hook, transport, victim);
+        var order = inOrder(hook, transport, victim, manager, world);
         order.verify(hook).setVelocity(new Vector(0, -0.05, 0));
+        order.verify(manager).callEvent(isA(PlayerVelocityEvent.class));
+        order.verify(victim).playHurtAnimation(-90f);
+        order.verify(world).playSound(victim, sound, SoundCategory.PLAYERS, 1, 1);
         order.verify(transport).send(victim, actual);
         order.verify(victim).hideEntity(plugin, hook);
         order.verify(hook).setHookedEntity(victim);
-        order.verify(victim).playHurtAnimation(-90f);
+        verify(victim, times(1)).playHurtAnimation(-90f);
+        verify(world, times(1)).playSound(victim, sound, SoundCategory.PLAYERS, 1, 1);
+        verify(victim, times(1)).damage(0, rodSource);
+        verify(victim, never()).setHealth(anyDouble());
         verify(manager, times(1)).callEvent(isA(PlayerVelocityEvent.class));
         var later = new PlayerVelocityEvent(victim, new Vector(0, 1, 0));
         classic.beginVelocity(later); classic.velocity(later);
@@ -714,17 +727,20 @@ public class ClassicCombatTest {
         var sword = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(sword);
         assertFalse(sword.isCancelled());
     }
-    @Test public void modeChangeInsideHookHideCannotAttachOrPlayOldClassicAnimation() {
+    @Test public void modeChangeInsideHookHideCannotSuppressAlreadyAcceptedHurtFeedbackOrAttach() {
         FishHook hook = rodHook(); rodDamage(hook, event -> {});
         doAnswer(call -> {
             settings = settings.withMode(CombatMode.MODERN, ClassicSettings.defaults());
             return null;
         }).when(victim).hideEntity(plugin, hook);
-        // The accepted velocity was already delivered before the hide event changed mode.
+        // Hurt and motion were already delivered before the later hide event changed mode.
         assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, victim, 0.4));
         verify(victim).showEntity(plugin, hook);
         verify(hook, never()).setHookedEntity(victim);
-        verify(victim, never()).playHurtAnimation(anyFloat());
+        var order = inOrder(victim);
+        order.verify(victim).playHurtAnimation(-90f);
+        order.verify(victim).hideEntity(plugin, hook);
+        verify(victim, times(1)).playHurtAnimation(-90f);
     }
     @Test public void regionChangeInsideHookHideDoesNotReadForeignVictimOrAttach() {
         FishHook hook = rodHook(); rodDamage(hook, event -> {});
@@ -735,6 +751,20 @@ public class ClassicCombatTest {
         }).when(victim).hideEntity(plugin, hook);
         assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, victim, 0.4));
         verifyNoInteractions(victim);
+        verify(hook, never()).setHookedEntity(victim);
+    }
+    @Test public void regionChangeInsideHurtFeedbackDoesNotReadForeignVictimOrSendMotion() {
+        RodVelocity.Transport transport = mock(RodVelocity.Transport.class);
+        classic = new ClassicCombat(plugin, () -> settings, store, tracker, RodVelocity.immediate(transport));
+        listener = new KnockbackListener(() -> settings, store, tracker, () -> true, classic);
+        FishHook hook = rodHook(); rodDamage(hook, event -> {});
+        doAnswer(call -> {
+            bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(false);
+            clearInvocations(victim);
+            return null;
+        }).when(victim).playHurtAnimation(-90f);
+        assertEquals(ClassicCombat.RodResult.REJECTED, classic.rodImpactResult(hook, attacker, victim, 0.4));
+        verifyNoInteractions(victim, transport);
         verify(hook, never()).setHookedEntity(victim);
     }
     @Test public void lateCancelledRodDamageProducesNoAnimationKnockbackOrImmunity() {

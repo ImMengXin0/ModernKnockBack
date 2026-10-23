@@ -37,19 +37,86 @@ public class RodVelocityTest {
         verify(player, never()).getScheduler(); verify(transport, never()).discard(any(), any());
     }
     @Test public void cancellationDiscardsPendingVelocityAndDoesNotSend() {
+        Runnable feedback = mock(Runnable.class);
         doAnswer(call -> { ((PlayerVelocityEvent)call.getArgument(0)).setCancelled(true); return null; })
                 .when(events).callEvent(any(PlayerVelocityEvent.class));
-        assertFalse(velocity.deliver(player, before, () -> true));
+        assertFalse(velocity.deliver(player, before, () -> true, feedback));
         verify(transport).discard(player, before); verify(transport, never()).send(any(), any());
+        verifyNoInteractions(feedback);
     }
     @Test public void nestedHitCannotBeOverwrittenOrClearedByOldRod() {
+        Runnable feedback = mock(Runnable.class);
         AtomicBoolean current = new AtomicBoolean(true);
         doAnswer(call -> { current.set(false); return null; }).when(events).callEvent(any());
-        assertFalse(velocity.deliver(player, before, current::get)); verifyNoInteractions(transport);
+        assertFalse(velocity.deliver(player, before, current::get, feedback)); verifyNoInteractions(transport, feedback);
     }
     @Test public void foreignRegionNeverReadsVelocityOrFiresAnEvent() {
+        Runnable feedback = mock(Runnable.class);
         bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(player)).thenReturn(false);
-        assertFalse(velocity.deliver(player, before, () -> true));
-        verify(player, never()).getVelocity(); verifyNoInteractions(transport, events);
+        assertFalse(velocity.deliver(player, before, () -> true, feedback));
+        verify(player, never()).getVelocity(); verifyNoInteractions(transport, events, feedback);
+    }
+    @Test public void acceptedFeedbackRunsAfterVelocityListenersAndBeforeMotion() {
+        Runnable feedback = mock(Runnable.class);
+        doAnswer(call -> { ((PlayerVelocityEvent)call.getArgument(0)).setVelocity(new Vector(0.4, 0.3, 0)); return null; })
+                .when(events).callEvent(any(PlayerVelocityEvent.class));
+        assertTrue(velocity.deliver(player, before, () -> true, feedback));
+        var order = inOrder(events, feedback, transport);
+        order.verify(events).callEvent(any(PlayerVelocityEvent.class));
+        order.verify(feedback).run();
+        order.verify(transport).send(player, new Vector(0.4, 0.3, 0));
+        verify(feedback, times(1)).run();
+        verify(player, never()).getScheduler();
+    }
+    @Test public void newerHitDuringFeedbackKeepsItsVelocity() {
+        AtomicBoolean current = new AtomicBoolean(true);
+        assertFalse(velocity.deliver(player, before, current::get, () -> current.set(false)));
+        verifyNoInteractions(transport);
+    }
+    @Test public void regionChangeDuringFeedbackDoesNotSendOrDiscard() {
+        assertFalse(velocity.deliver(player, before, () -> true,
+                () -> bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(player)).thenReturn(false)));
+        verifyNoInteractions(transport);
+    }
+    @Test public void failedFeedbackDoesNotSendMotion() {
+        RuntimeException failure = new IllegalStateException("feedback failed");
+        assertSame(failure, assertThrows(RuntimeException.class,
+                () -> velocity.deliver(player, before, () -> true, () -> { throw failure; })));
+        verifyNoInteractions(transport);
+    }
+    @Test public void invalidVelocityDoesNotProduceFeedback() {
+        Runnable feedback = mock(Runnable.class);
+        when(player.getVelocity()).thenReturn(new Vector(Double.NaN, 0.3, 0));
+        assertThrows(IllegalArgumentException.class, () -> velocity.deliver(player, before, () -> true, feedback));
+        verifyNoInteractions(feedback, transport);
+    }
+    @Test public void deferredFeedbackPrecedesVelocityAndRequiresCurrentHit() {
+        Runnable feedback = mock(Runnable.class);
+        assertTrue(RodVelocity.deferred().deliver(player, before, () -> true, feedback));
+        var order = inOrder(feedback, player);
+        order.verify(feedback).run();
+        order.verify(player).setVelocity(new Vector(0.5, 0.34, 0));
+        verifyNoInteractions(events, transport);
+        clearInvocations(player);
+        AtomicBoolean current = new AtomicBoolean(true);
+        assertFalse(RodVelocity.deferred().deliver(player, before, current::get, () -> current.set(false)));
+        verify(player, never()).setVelocity(any());
+    }
+    @Test public void threeArgumentCustomImplementationsKeepTheirFunctionalInterface() {
+        Runnable delivered = mock(Runnable.class), feedback = mock(Runnable.class);
+        RodVelocity custom = (target, previous, current) -> { delivered.run(); return true; };
+        assertTrue(custom.deliver(player, before, () -> true, feedback));
+        var order = inOrder(delivered, feedback);
+        order.verify(delivered).run();
+        order.verify(feedback).run();
+        verifyNoInteractions(events, transport);
+    }
+    @Test public void rejectedOrSupersededCustomDeliveryDoesNotProduceFeedback() {
+        Runnable feedback = mock(Runnable.class);
+        RodVelocity rejected = (target, previous, current) -> false;
+        assertFalse(rejected.deliver(player, before, () -> true, feedback));
+        RodVelocity superseded = (target, previous, current) -> true;
+        assertTrue(superseded.deliver(player, before, () -> false, feedback));
+        verifyNoInteractions(feedback);
     }
 }
