@@ -66,7 +66,7 @@ public final class RodListener implements Listener {
         var before = victim.getVelocity();
         if (settings.get().classicEnabled()) {
             if (classic == null) return;
-            // ClassicCombat validates the hit, then sends hurt feedback and motion in this tick.
+            // ClassicCombat completes velocity delivery before the cosmetic hurt effects.
             classic.rodImpactResult(hook, player, victim, rod.impactStrength());
             return;
         } else

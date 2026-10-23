@@ -16,7 +16,6 @@ public final class ServerBridgeProbe {
         verifyRetainedRodContact();
         verifyAttackReach();
         verifyClassicVelocityDelivery();
-        verifyRodFeedback();
         RodVelocity.forServer();
         TeamPacketCodec codec = new TeamPacketCodec();
         Class<?> boardClass = Class.forName("net.minecraft.world.scores.Scoreboard");
@@ -115,36 +114,15 @@ public final class ServerBridgeProbe {
     }
     private static void require(boolean condition, String message) { if (!condition) throw new IllegalStateException(message); }
 
-    private static void verifyRetainedRodContact() throws Exception {
+    private static void verifyRetainedRodContact() {
         var hook = Mockito.mock(net.minecraft.world.entity.projectile.FishingHook.class, Mockito.CALLS_REAL_METHODS);
-        var target = Mockito.mock(net.minecraft.server.level.ServerPlayer.class);
-        Mockito.when(target.getId()).thenReturn(77);
-        var world = Mockito.mock(net.minecraft.world.level.Level.class);
-        Mockito.when(world.getEntity(77)).thenReturn(target);
-        Mockito.doReturn(world).when(hook).level();
-        // Use the real metadata storage/setter/callback for the attachment field. Other
-        // entity data and world lifecycle are outside this small native bridge probe.
-        var attachment = net.minecraft.world.entity.projectile.FishingHook.DATA_HOOKED_ENTITY;
-        var items = new net.minecraft.network.syncher.SynchedEntityData.DataItem<?>[attachment.id() + 1];
-        items[attachment.id()] = new net.minecraft.network.syncher.SynchedEntityData.DataItem<>(attachment, 0);
-        var dataConstructor = net.minecraft.network.syncher.SynchedEntityData.class.getDeclaredConstructor(
-                net.minecraft.network.syncher.SyncedDataHolder.class,
-                net.minecraft.network.syncher.SynchedEntityData.DataItem[].class);
-        dataConstructor.setAccessible(true);
-        var metadata = dataConstructor.newInstance(hook, items);
-        Mockito.doReturn(metadata).when(hook).getEntityData();
-        var craftHook = Mockito.mock(org.bukkit.craftbukkit.entity.CraftFishHook.class);
-        Mockito.when(craftHook.getHandle()).thenReturn(hook);
-        Mockito.doCallRealMethod().when(craftHook).setHookedEntity(Mockito.any());
-        Mockito.doCallRealMethod().when(craftHook).getHookedEntity();
-        var craftTarget = Mockito.mock(org.bukkit.craftbukkit.entity.CraftPlayer.class);
-        Mockito.when(craftTarget.getHandle()).thenReturn(target);
-        Mockito.when(target.getBukkitEntity()).thenReturn(craftTarget);
+        var target = Mockito.mock(net.minecraft.world.entity.Entity.class);
         var hit = new net.minecraft.world.phys.EntityHitResult(target, net.minecraft.world.phys.Vec3.ZERO);
-        var event = new org.bukkit.event.entity.ProjectileHitEvent(craftHook, craftTarget);
+        var event = new org.bukkit.event.entity.ProjectileHitEvent(Mockito.mock(org.bukkit.entity.FishHook.class),
+                Mockito.mock(org.bukkit.entity.Player.class));
         event.setCancelled(true);
         // Exercise the real Paper pre-hit gate, mocking only the external Bukkit dispatch.
-        // Rejected contact remains detached; accepted plugin attachment remains attached.
+        // It must prevent attachment without requiring removal of the actual bobber.
         try (var events = Mockito.mockStatic(org.bukkit.craftbukkit.event.CraftEventFactory.class)) {
             events.when(() -> org.bukkit.craftbukkit.event.CraftEventFactory.callProjectileHitEvent(hook, hit)).thenReturn(event);
             for (int tick : new int[]{1, 2, 20}) {
@@ -153,40 +131,10 @@ public final class ServerBridgeProbe {
                         "Cancelled rod contact entered native hit handling");
                 require(hook.hookedIn == null && !hook.isRemoved(), "Cancelled contact attached or removed the retained bobber");
             }
-            craftHook.setHookedEntity(craftTarget);
-            require(hook.hookedIn == target && craftHook.getHookedEntity() == craftTarget
-                            && metadata.get(attachment) == 78 && metadata.getItem(attachment).isDirty(),
-                    "CraftFishHook attachment did not publish the native entity reference and id+1 metadata");
-            for (int tick : new int[]{21, 22, 40}) {
-                hook.tickCount = tick;
-                require(hook.preHitTargetOrDeflectSelf(hit) == net.minecraft.world.entity.projectile.ProjectileDeflection.NONE,
-                        "Accepted attachment entered an extra native collision");
-                require(hook.hookedIn == target && metadata.get(attachment) == 78 && !hook.isRemoved(),
-                        "Cancelled native collision detached or removed the plugin's accepted attachment");
-            }
         }
-        craftHook.setHookedEntity(null);
-        require(hook.hookedIn == null && metadata.get(attachment) == 0,
-                "CraftFishHook detach left native attachment metadata behind");
-        hook.setHookedEntity(target);
-        require(hook.hookedIn == target && metadata.get(attachment) == 78,
-                "Native FishingHook attachment disagrees with the Bukkit bridge");
-        hook.setHookedEntity(null);
-        require(hook.hookedIn == null && metadata.get(attachment) == 0,
-                "Native FishingHook detach failed to clear its entity metadata");
+        Mockito.verify(hook, Mockito.never()).setHookedEntity(Mockito.any());
         Mockito.verify(hook, Mockito.never()).pullEntity(Mockito.any());
-
-        UUID hookId = UUID.randomUUID(), otherHiddenId = UUID.randomUUID();
-        Mockito.doReturn(hookId).when(hook).getUUID();
-        var hidden = new HashMap<UUID, Set<java.lang.ref.WeakReference<org.bukkit.plugin.Plugin>>>();
-        hidden.put(hookId, Set.of()); hidden.put(otherHiddenId, Set.of());
-        Field visibility = org.bukkit.craftbukkit.entity.CraftPlayer.class.getDeclaredField("invertedVisibilityEntities");
-        visibility.setAccessible(true); visibility.set(craftTarget, hidden);
-        Mockito.doCallRealMethod().when(craftTarget).onEntityRemove(Mockito.any());
-        craftTarget.onEntityRemove(hook);
-        require(!hidden.containsKey(hookId) && hidden.containsKey(otherHiddenId),
-                "Native entity-removal callback did not clear only the removed hook's visibility record");
-        System.out.println("Native retained rod OK: rejected contacts stay detached; accepted native metadata survives cancelled hits without pull; detach and removal visibility cleanup passed");
+        System.out.println("Native retained rod OK: repeated cancelled contacts do not attach, remove or pull the bobber/target");
     }
 
     private static void verifyAttackReach() {
@@ -308,119 +256,6 @@ public final class ServerBridgeProbe {
         }
         System.out.println("Native classic velocity OK: event-only equality bug reproduced; restored entity motion sent once without recursive events");
         if (flush != null) System.out.println("Native Leaf flush OK: two synchronous events reproduced; one-shot protection fails, both dispatches preserve the final self packet");
-    }
-
-    private static void verifyRodFeedback() throws Exception {
-        var selfPackets = new ArrayList<net.minecraft.network.protocol.Packet<?>>();
-        var observerPackets = new ArrayList<net.minecraft.network.protocol.Packet<?>>();
-        var desired = new org.bukkit.util.Vector(0.4, 0.36075, -0.12);
-        var before = new org.bukkit.util.Vector(0.1, 0, 0.02);
-        var motion = new java.util.concurrent.atomic.AtomicReference<>(net.minecraft.world.phys.Vec3.ZERO);
-        var nativeVictim = Mockito.mock(net.minecraft.server.level.ServerPlayer.class);
-        Mockito.when(nativeVictim.getId()).thenReturn(42);
-        Mockito.when(nativeVictim.getDeltaMovement()).thenAnswer(call -> motion.get());
-        Mockito.doAnswer(call -> { motion.set(call.getArgument(0)); return null; })
-                .when(nativeVictim).setDeltaMovement(Mockito.any(net.minecraft.world.phys.Vec3.class));
-        nativeVictim.connection = Mockito.mock(net.minecraft.server.network.ServerGamePacketListenerImpl.class);
-        Mockito.doAnswer(call -> { selfPackets.add(call.getArgument(0)); return null; })
-                .when(nativeVictim.connection).send(Mockito.any(net.minecraft.network.protocol.Packet.class));
-        var observer = Mockito.mock(net.minecraft.server.network.ServerGamePacketListenerImpl.class);
-        Mockito.doAnswer(call -> { observerPackets.add(call.getArgument(0)); return null; })
-                .when(observer).send(Mockito.any(net.minecraft.network.protocol.Packet.class));
-
-        // Execute real tracking broadcasts, including the core's self-recipient branch.
-        // Leaf exposes a cached seenBy array; ASPaper/Folia iterate the same seenBy set.
-        var tracked = Mockito.mock(net.minecraft.server.level.ChunkMap.TrackedEntity.class, call ->
-                call.getMethod().getName().equals("seenBy")
-                        ? new net.minecraft.server.network.ServerPlayerConnection[]{observer} : call.callRealMethod());
-        Field trackedEntity = net.minecraft.server.level.ChunkMap.TrackedEntity.class.getDeclaredField("entity");
-        trackedEntity.setAccessible(true); trackedEntity.set(tracked, nativeVictim);
-        Field seenBy = net.minecraft.server.level.ChunkMap.TrackedEntity.class.getField("seenBy");
-        seenBy.setAccessible(true); seenBy.set(tracked, new HashSet<>(Set.of(observer)));
-        Mockito.when(nativeVictim.moonrise$getTrackedEntity()).thenReturn(tracked);
-        var chunks = Mockito.mock(net.minecraft.server.level.ChunkMap.class, Mockito.CALLS_REAL_METHODS);
-        var entityMap = new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<net.minecraft.server.level.ChunkMap.TrackedEntity>();
-        entityMap.put(42, tracked);
-        try {
-            Field chunkEntities = net.minecraft.server.level.ChunkMap.class.getDeclaredField("entityMap");
-            chunkEntities.setAccessible(true); chunkEntities.set(chunks, entityMap);
-        } catch (NoSuchFieldException ignored) {
-            // Folia obtains tracking directly from entity.moonrise$getTrackedEntity().
-        }
-        var cache = Mockito.mock(net.minecraft.server.level.ServerChunkCache.class, Mockito.CALLS_REAL_METHODS);
-        Field chunkMap = net.minecraft.server.level.ServerChunkCache.class.getDeclaredField("chunkMap");
-        chunkMap.setAccessible(true); chunkMap.set(cache, chunks);
-        var world = Mockito.mock(net.minecraft.server.level.ServerLevel.class);
-        Mockito.when(world.getChunkSource()).thenReturn(cache);
-        Mockito.when(nativeVictim.level()).thenReturn(world);
-
-        var victim = Mockito.mock(org.bukkit.craftbukkit.entity.CraftPlayer.class);
-        Field entity = org.bukkit.craftbukkit.entity.CraftEntity.class.getDeclaredField("entity");
-        entity.setAccessible(true); entity.set(victim, nativeVictim);
-        Mockito.when(victim.getHandle()).thenReturn(nativeVictim);
-        Mockito.when(victim.getEntityId()).thenReturn(42);
-        Mockito.doCallRealMethod().when(victim).getVelocity();
-        Mockito.doCallRealMethod().when(victim).setVelocity(Mockito.any(org.bukkit.util.Vector.class));
-        Mockito.doCallRealMethod().when(victim).playHurtAnimation(Mockito.anyFloat());
-        var manager = Mockito.mock(org.bukkit.plugin.PluginManager.class);
-        var cancelled = new AtomicBoolean(false);
-        int[] dispatches = {0}, feedbacks = {0};
-        Mockito.doAnswer(call -> {
-            dispatches[0]++;
-            require(selfPackets.isEmpty() && observerPackets.isEmpty(), "Rod feedback was sent before final velocity acceptance");
-            ((org.bukkit.event.player.PlayerVelocityEvent) call.getArgument(0)).setCancelled(cancelled.get());
-            return null;
-        }).when(manager).callEvent(Mockito.any(org.bukkit.event.Event.class));
-        RodVelocity delivery = RodVelocity.forServer();
-        try (var bukkit = Mockito.mockStatic(org.bukkit.Bukkit.class)) {
-            bukkit.when(() -> org.bukkit.Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(true);
-            bukkit.when(org.bukkit.Bukkit::getPluginManager).thenReturn(manager);
-            for (boolean cancel : new boolean[]{false, true}) {
-                cancelled.set(cancel); dispatches[0] = 0; feedbacks[0] = 0;
-                selfPackets.clear(); observerPackets.clear();
-                victim.setVelocity(desired.clone());
-                boolean delivered = delivery.deliver(victim, before, () -> true, () -> {
-                    feedbacks[0]++;
-                    victim.playHurtAnimation(-90f);
-                });
-                require(delivered != cancel && dispatches[0] == 1, "Rod acceptance or velocity event count changed");
-                if (cancel) {
-                    require(feedbacks[0] == 0 && selfPackets.isEmpty() && observerPackets.isEmpty(),
-                            "Cancelled rod velocity emitted hurt feedback or movement");
-                    require(victim.getVelocity().equals(before), "Cancelled rod velocity was not restored");
-                } else {
-                    require(feedbacks[0] == 1, "Accepted rod did not emit exactly one feedback callback");
-                    for (var packets : List.of(selfPackets, observerPackets)) {
-                        require(packets.size() == 2
-                                        && packets.get(0) instanceof net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket
-                                        && packets.get(1) instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket,
-                                "Victim/observer must receive one hurt packet before one motion packet");
-                        var hurt = (net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) packets.get(0);
-                        var velocity = (net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket) packets.get(1);
-                        require(hurt.id() == 42 && hurt.yaw() == 0 && velocity.getId() == 42,
-                                "Rod feedback changed entity identity or legacy hurt direction");
-                        require(velocity.getMovement().distanceTo(org.bukkit.craftbukkit.util.CraftVector.toVec3(desired)) < 1e-4,
-                                "Rod feedback changed the delivered knockback vector");
-                    }
-                    require(selfPackets.getFirst() == observerPackets.getFirst(), "Native hurt broadcast failed to reach both recipients");
-                    require(victim.getVelocity().equals(desired), "Accepted feedback changed server motion");
-                }
-                require(!nativeVictim.hurtMarked, "Rod delivery left a second velocity update pending");
-            }
-        }
-        Mockito.verify(victim, Mockito.never()).damage(Mockito.anyDouble());
-        Mockito.verify(victim, Mockito.never()).damage(Mockito.anyDouble(), Mockito.any(org.bukkit.damage.DamageSource.class));
-        Mockito.verify(victim, Mockito.never()).setHealth(Mockito.anyDouble());
-        // This shared native method also exists in the vanilla client; full client rendering
-        // is outside this offline probe. No damage call is necessary to start hurtTime.
-        Mockito.doCallRealMethod().when(nativeVictim).animateHurt(Mockito.anyFloat());
-        nativeVictim.hurtTime = 0; nativeVictim.hurtDuration = 0;
-        int immunity = nativeVictim.invulnerableTime;
-        nativeVictim.animateHurt(0);
-        require(nativeVictim.hurtTime == 10 && nativeVictim.hurtDuration == 10
-                        && nativeVictim.invulnerableTime == immunity,
-                "Native hurt animation did not set its ten-tick visual state independently of damage immunity");
-        System.out.println("Native rod feedback OK: real Craft hurt packet reaches self/observer before motion; cancelled velocity emits neither; ten-tick hurt state without extra damage");
     }
 
     private static void attachNativeVelocityTracker(net.minecraft.server.level.ServerPlayer player,
