@@ -31,6 +31,7 @@ final class TeamPacketCodec {
     private final Object never = collision.getParameterTypes()[0].getField("NEVER").get(null);
     private final List<Method[]> copies = new ArrayList<>();
     private final SweepEffectFilter sweepEffects = new SweepEffectFilter();
+    private final HurtAnimationFilter hurtAnimation = new HurtAnimationFilter();
 
     TeamPacketCodec() throws ReflectiveOperationException {
         packetConstructor.setAccessible(true); method.setAccessible(true);
@@ -74,13 +75,17 @@ final class TeamPacketCodec {
         return transform(value, state, false);
     }
     List<Object> transform(Object value, CollisionTeams<Object> state, boolean hideSweep) throws ReflectiveOperationException {
-        if (hideSweep && sweepEffects.matches(value)) return List.of();
+        return transform(value, state, hideSweep, -1);
+    }
+    List<Object> transform(Object value, CollisionTeams<Object> state, boolean classic, int selfEntityId) throws ReflectiveOperationException {
+        if (classic && sweepEffects.matches(value)) return List.of();
         if (bundle.isInstance(value)) {
             var output = new ArrayList<Object>();
-            for (Object child : (Iterable<?>) children.invoke(value)) output.addAll(transform(child, state, hideSweep));
-            if (hideSweep && output.isEmpty()) return List.of();
+            for (Object child : (Iterable<?>) children.invoke(value)) output.addAll(transform(child, state, classic, selfEntityId));
+            if (classic && output.isEmpty()) return List.of();
             return List.of(bundleConstructor.newInstance(output));
         }
+        if (classic) value = hurtAnimation.transform(value, selfEntityId);
         var decoded = decode(value);
         if (decoded == null) return List.of(value);
         var output = new ArrayList<Object>();

@@ -89,14 +89,15 @@ public final class RodListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void preventClassicPull(PlayerFishEvent event) {
         if (event.isCancelled() || event.getState() != PlayerFishEvent.State.CAUGHT_ENTITY
-                || !(event.getCaught() instanceof LivingEntity) || !settings.get().classicEnabled()
+                || !(event.getCaught() instanceof LivingEntity)
                 || !CombatTracker.owns(event.getPlayer()) || !CombatTracker.owns(event.getHook())
-                || config(event.getPlayer()) == null) return;
+                || !ClassicRodContact.spent(event.getHook())
+                    && (!settings.get().classicEnabled() || config(event.getPlayer()) == null)) return;
         // Cancellation happens before native pullEntity and before the client pull status packet (31).
+        // A retained classic hook remains protected while a mode/exclusion change is being cleaned up.
         event.setCancelled(true);
         FishHook hook = event.getHook();
-        hook.setHookedEntity(null);
-        hook.remove(); hooks.remove(hook);
+        removeOwnedHook(hook);
         recordReel(event.getPlayer());
     }
     private void recordReel(Player player) {
@@ -133,7 +134,7 @@ public final class RodListener implements Listener {
             boolean launched = CombatTracker.owns(hook);
             if (launched) launch(hook, rod);
             hook.getScheduler().run(plugin, task -> {
-                if (hook.isValid() && plugin.isEnabled() && settings.get() != snapshot) { hook.remove(); hooks.remove(hook); }
+                if (hook.isValid() && plugin.isEnabled() && settings.get() != snapshot) removeOwnedHook(hook);
                 else if (!event.isCancelled() && hook.isValid() && plugin.isEnabled() && snapshot.enabled()) {
                     if (!launched) launch(hook, rod);
                     sweep(hook, snapshot);
@@ -170,7 +171,7 @@ public final class RodListener implements Listener {
             boolean expired = rod.lifetimeTicks() > 0 && Integer.toUnsignedLong(hook.getTicksLived() - born) >= rod.lifetimeTicks();
             boolean outside = rod.maxDistance() > 0 && (!origin.getWorld().equals(location.getWorld())
                     || origin.distanceSquared(location) > rod.maxDistance() * rod.maxDistance());
-            if (expired || outside) { hook.remove(); scheduled.cancel(); tasks.remove(scheduled); hooks.remove(hook); return; }
+            if (expired || outside) { removeOwnedHook(hook); scheduled.cancel(); tasks.remove(scheduled); return; }
             sweep(hook, snapshot);
             if (!hook.isValid()) { scheduled.cancel(); tasks.remove(scheduled); hooks.remove(hook); }
         }, () -> { if (holder[0] != null) tasks.remove(holder[0]); hooks.remove(hook); }, 1, 1);
@@ -196,15 +197,49 @@ public final class RodListener implements Listener {
             if (hook.isValid()) hooks.add(hook);
         }
     }
-    @EventHandler public void quit(PlayerQuitEvent event) { times.remove(event.getPlayer().getUniqueId()); }
-    @EventHandler public void respawn(PlayerRespawnEvent event) { times.remove(event.getPlayer().getUniqueId()); }
+    @EventHandler public void quit(PlayerQuitEvent event) {
+        times.remove(event.getPlayer().getUniqueId());
+        retirePlayerHooks(event.getPlayer());
+    }
+    @EventHandler public void respawn(PlayerRespawnEvent event) {
+        times.remove(event.getPlayer().getUniqueId());
+        retirePlayerHooks(event.getPlayer());
+    }
     @EventHandler public void removed(org.bukkit.event.entity.EntityRemoveEvent event) {
         if (event.getEntity() instanceof FishHook hook) hooks.remove(hook);
     }
+    private void retirePlayerHooks(Player player) {
+        for (FishHook hook : new ArrayList<>(hooks)) {
+            Runnable retire = () -> {
+                if (!CombatTracker.owns(hook) || !hook.isValid()) return;
+                if (hook.getShooter() == player || hook.getHookedEntity() == player) removeOwnedHook(hook);
+            };
+            if (CombatTracker.owns(hook)) retire.run();
+            else hook.getScheduler().run(plugin, task -> retire.run(), null);
+        }
+    }
+    private void removeOwnedHook(FishHook hook) {
+        if (!CombatTracker.owns(hook)) return;
+        if (hook.isValid()) {
+            hook.setHookedEntity(null);
+            // Native tracking removal clears each viewer's hideEntity UUID record.
+            hook.remove();
+        }
+        hooks.remove(hook);
+    }
     public void reset() {
         tasks.forEach(ScheduledTask::cancel); tasks.clear(); times.clear();
-        for (FishHook hook : new ArrayList<>(hooks)) hook.getScheduler().run(plugin, task -> { if (hook.isValid()) hook.remove(); }, null);
+        for (FishHook hook : new ArrayList<>(hooks)) {
+            if (CombatTracker.owns(hook)) removeOwnedHook(hook);
+            else hook.getScheduler().run(plugin, task -> removeOwnedHook(hook), null);
+        }
         hooks.clear();
     }
-    public void close() { tasks.forEach(ScheduledTask::cancel); tasks.clear(); times.clear(); hooks.clear(); }
+    public void close() {
+        tasks.forEach(ScheduledTask::cancel); tasks.clear(); times.clear();
+        // Paper's main thread and Folia's normal shutdown thread can remove their owned
+        // hooks now. Never schedule plugin tasks after disable or touch a foreign region.
+        for (FishHook hook : new ArrayList<>(hooks)) removeOwnedHook(hook);
+        hooks.clear();
+    }
 }

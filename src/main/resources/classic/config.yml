@@ -1,4 +1,4 @@
-# Classic 路由 / ModernKnockBack 2.0.4。攻击节奏在 combat.yml，向量在 profiles.yml。
+# Classic 路由 / ModernKnockBack 2.0.5。攻击节奏在 combat.yml，向量在 profiles.yml。
 config-version: 1
 enabled: true
 # By default only actual players and identified bots receive modifications.
