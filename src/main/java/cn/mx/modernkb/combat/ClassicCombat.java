@@ -3,6 +3,7 @@ package cn.mx.modernkb.combat;
 import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.config.*;
 import cn.mx.modernkb.compat.RodVelocity;
+import cn.mx.modernkb.compat.LeafVelocityDispatch;
 import cn.mx.modernkb.rod.ClassicRodContact;
 import com.destroystokyo.paper.event.player.PlayerJumpEvent;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
@@ -11,6 +12,7 @@ import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
@@ -43,8 +45,8 @@ public final class ClassicCombat implements Listener {
     private record Ground(double y, boolean limited) {}
     private record RodStamp(Settings settings, int tick, EntityDamageByEntityEvent damage, EntityKnockbackEvent knockback) {}
     private record Pending(Settings settings, int tick, EntityDamageByEntityEvent damage,
-                           EntityKnockbackEvent knockback, boolean rod) {}
-    private record VelocityGuard(Pending token, Vector velocity) {}
+                           EntityKnockbackEvent knockback, boolean rod, boolean leafFlush, Object generation) {}
+    private record VelocityGuard(Pending token, Vector velocity, boolean leafFlushFollows) {}
     private static final class RodScope {
         final Settings settings;
         final FishHook hook;
@@ -322,10 +324,15 @@ public final class ClassicCombat implements Listener {
         RodScope scope = rodScope.get();
         EntityDamageByEntityEvent damage = rod
                 ? scope != null && scope.victim == victim ? scope.damage : null : hit == null ? null : hit.damage;
-        Pending value = new Pending(config, victim.getTicksLived(), damage, knockback, rod);
+        Pending value = new Pending(config, victim.getTicksLived(), damage, knockback, rod, false, new Object());
         UUID id = victim.getUniqueId();
         pending.put(id, value);
-        victim.getScheduler().runDelayed(plugin, task -> pending.remove(id, value), () -> pending.remove(id, value), rod ? 2 : 1);
+        victim.getScheduler().runDelayed(plugin, task -> expirePending(id, value),
+                () -> expirePending(id, value), rod ? 2 : 1);
+    }
+    private void expirePending(UUID id, Pending expected) {
+        // The one Leaf follow-up shares this generation; a newer hit always has another one.
+        pending.computeIfPresent(id, (key, value) -> value.generation == expected.generation ? null : value);
     }
     private boolean valid(Pending value, Player victim) {
         return value.settings == settings.get() && value.settings.classicEnabled()
@@ -341,11 +348,17 @@ public final class ClassicCombat implements Listener {
         Pending value = pending.get(victim.getUniqueId());
         if (value == null) return;
         if (!valid(value, victim) || event.isCancelled()) { pending.remove(victim.getUniqueId(), value); return; }
+        LeafVelocityDispatch.Stage stage = value.rod ? LeafVelocityDispatch.Stage.NONE : LeafVelocityDispatch.stage();
+        if (value.leafFlush && stage != LeafVelocityDispatch.Stage.IN_FLUSH) {
+            pending.remove(victim.getUniqueId(), value);
+            return;
+        }
         // Native melee events can contain the pre-hit motion; the entity already has the actual
         // final KB. Capture it now, before sync, including later native/event changes and movement.
         Vector current = victim.getVelocity().clone();
         if (!KnockbackMath.finite(current)) { pending.remove(victim.getUniqueId(), value); return; }
-        velocityEvents.put(event, new VelocityGuard(value, current));
+        velocityEvents.put(event, new VelocityGuard(value, current,
+                !value.leafFlush && stage == LeafVelocityDispatch.Stage.BEFORE_FLUSH));
     }
     /** Finish within this velocity dispatch; never defer or replay a previous hit's motion. */
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -363,6 +376,13 @@ public final class ClassicCombat implements Listener {
             // event back when it differs from its initial value, so equal vectors need this too.
             // Consume the token first; supported cores' setVelocity does not fire another event.
             if (!victim.getVelocity().equals(value.velocity)) victim.setVelocity(value.velocity.clone());
+            if (value.leafFlushFollows && valid(value.token, victim)) {
+                Pending token = value.token;
+                // Leaf fires a second event synchronously inside its native tracker flush.
+                // Give only that exact path one new token; never replay this captured vector.
+                pending.putIfAbsent(victim.getUniqueId(), new Pending(token.settings, token.tick, token.damage,
+                        token.knockback, false, true, token.generation));
+            }
         }
     }
     public enum RodResult { INACTIVE, REJECTED, APPLIED }
@@ -438,28 +458,36 @@ public final class ClassicCombat implements Listener {
         } finally {
             activeRods.remove(victim.getUniqueId(), current);
             if (old == null) rodScope.remove(); else rodScope.set(old);
-            // Never leave a classic hit bobber attached, including cancelled/immune hits.
+            // Spend the native contact first. Only a delivered, accepted hit may attach below.
             detachHook(hook);
         }
         if (current.applied && current.knockback != null && !current.knockback.isCancelled()
                 && current.damage != null && !current.damage.isCancelled() && settings.get() == config) {
             rodHits.computeIfPresent(victim.getUniqueId(), (id, stamp) -> stamp.settings == config && stamp.damage == current.damage
                     ? new RodStamp(config, now, current.damage, current.knockback) : stamp);
+            UUID victimId = victim.getUniqueId(), shooterId = shooter.getUniqueId();
+            BooleanSupplier currentHit = () -> {
+                RodStamp stamp = rodHits.get(victimId);
+                return CombatTracker.owns(victim) && CombatTracker.owns(shooter)
+                        && settings.get() == config && victim.getLastDamageCause() == current.damage
+                        && !current.damage.isCancelled() && !current.knockback.isCancelled()
+                        && !players.get(victimId).excluded() && !players.get(shooterId).excluded()
+                        && stamp != null && stamp.damage == current.damage && stamp.knockback == current.knockback;
+            };
             boolean sent;
             try {
-                sent = !(victim instanceof Player player) || rodVelocity.deliver(player, previousVelocity, () -> {
-                    RodStamp stamp = rodHits.get(victim.getUniqueId());
-                    return settings.get() == config && victim.getLastDamageCause() == current.damage
-                            && !current.damage.isCancelled() && stamp != null && stamp.damage == current.damage;
-                });
+                sent = currentHit.getAsBoolean()
+                        && (!(victim instanceof Player player) || rodVelocity.deliver(player, previousVelocity, currentHit));
             } catch (RuntimeException | Error failure) {
                 discardRod(current, previousImmunity, previousDamage);
                 throw failure;
             }
             if (sent) {
-                if (victim instanceof Player && current.damage.getDamage() == 0 && current.damage.getFinalDamage() == 0) {
-                    double yaw = Math.toDegrees(Math.atan2(-current.attack.direction().getX(), current.attack.direction().getZ()));
-                    victim.playHurtAnimation((float)(yaw - victim.getLocation().getYaw()));
+                ClassicRodContact.attach(hook, victim, plugin, currentHit);
+                if (currentHit.getAsBoolean() && victim instanceof Player
+                        && current.damage.getDamage() == 0 && current.damage.getFinalDamage() == 0) {
+                    // CraftBukkit adds 90 degrees; native yaw 0 matches the fixed 1.8 tilt.
+                    victim.playHurtAnimation(-90f);
                     var sound = victim.getHurtSound();
                     if (sound != null) victim.getWorld().playSound(victim, sound, SoundCategory.PLAYERS, 1, 1);
                 }

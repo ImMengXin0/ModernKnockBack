@@ -2,6 +2,7 @@ package cn.mx.modernkb;
 
 import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.combat.*;
+import cn.mx.modernkb.compat.LeafVelocityDispatch;
 import cn.mx.modernkb.config.*;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.threadedregions.scheduler.EntityScheduler;
@@ -313,5 +314,148 @@ public class ClassicVelocityProtectionTest {
         classic.velocity(later);
         assertEquals(new Vector(0.2, 0.1, 0), later.getVelocity());
         verify(victim, times(1)).setVelocity(current);
+    }
+
+    private PlayerVelocityEvent dispatchAfterDirectSyncWrite(Vector current) {
+        motion.set(current);
+        var event = new PlayerVelocityEvent(victim, new Vector());
+        classic.beginVelocity(event);
+        motion.set(new Vector(current.getX(), 0.8, current.getZ()));
+        classic.velocity(event);
+        return event;
+    }
+
+    @Test public void leafNativeFlushProtectsBothDispatchesWithFreshMotionAndNeverAThird() {
+        try (var leaf = mockStatic(LeafVelocityDispatch.class)) {
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.BEFORE_FLUSH);
+            prepared();
+            Vector first = new Vector(0.4, 0.36, 0);
+            assertEquals(first, dispatchAfterDirectSyncWrite(first).getVelocity());
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.IN_FLUSH);
+            Vector finalMotion = new Vector(0.28, 0.3, -0.1);
+            assertEquals(finalMotion, dispatchAfterDirectSyncWrite(finalMotion).getVelocity());
+            assertEquals(finalMotion, motion.get());
+            var third = dispatchAfterDirectSyncWrite(new Vector(0.2, 0.2, 0));
+            assertEquals(new Vector(), third.getVelocity());
+            assertEquals(new Vector(0.2, 0.8, 0), motion.get());
+            verify(victim, times(2)).setVelocity(any());
+        }
+    }
+
+    @Test public void leafFollowupCannotProtectAnUnrelatedOrLaterTrackingDispatch() {
+        try (var leaf = mockStatic(LeafVelocityDispatch.class)) {
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.BEFORE_FLUSH);
+            prepared();
+            dispatchAfterDirectSyncWrite(new Vector(0.4, 0.36, 0));
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.NONE);
+            assertEquals(new Vector(), dispatchAfterDirectSyncWrite(new Vector(0.2, 0.2, 0)).getVelocity());
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.IN_FLUSH);
+            assertEquals(new Vector(), dispatchAfterDirectSyncWrite(new Vector(0.3, 0.3, 0)).getVelocity());
+            verify(victim, times(1)).setVelocity(any());
+        }
+    }
+
+    @Test public void cancelledFirstLeafDispatchDoesNotLeaveASecondChance() {
+        try (var leaf = mockStatic(LeafVelocityDispatch.class)) {
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.BEFORE_FLUSH);
+            prepared();
+            motion.set(new Vector(0.4, 0.36, 0));
+            var first = new PlayerVelocityEvent(victim, new Vector());
+            classic.beginVelocity(first);
+            first.setCancelled(true);
+            classic.velocity(first);
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.IN_FLUSH);
+            assertEquals(new Vector(), dispatchAfterDirectSyncWrite(new Vector(0.3, 0.3, 0)).getVelocity());
+            verify(victim, never()).setVelocity(any());
+        }
+    }
+
+    @Test public void leafFollowupRechecksKnockbackDamageModeAndExclusion() {
+        Settings original = settings;
+        try (var leaf = mockStatic(LeafVelocityDispatch.class)) {
+            for (int invalidation = 0; invalidation < 4; invalidation++) {
+                settings = original;
+                store.excluded(victim.getUniqueId(), false);
+                leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.BEFORE_FLUSH);
+                var damage = acceptedDamage();
+                var knockback = prepared();
+                dispatchAfterDirectSyncWrite(new Vector(0.4, 0.36, 0));
+                switch (invalidation) {
+                    case 0 -> knockback.setCancelled(true);
+                    case 1 -> when(damage.isCancelled()).thenReturn(true);
+                    case 2 -> settings = settings.withMode(CombatMode.MODERN, ClassicSettings.defaults());
+                    case 3 -> store.excluded(victim.getUniqueId(), true);
+                    default -> throw new AssertionError();
+                }
+                leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.IN_FLUSH);
+                assertEquals(new Vector(), dispatchAfterDirectSyncWrite(new Vector(0.3, 0.3, 0)).getVelocity());
+            }
+            verify(victim, times(4)).setVelocity(any());
+        }
+    }
+
+    @Test public void oldLeafFollowupCannotConsumeANewerHitDuringItsDispatch() {
+        try (var leaf = mockStatic(LeafVelocityDispatch.class)) {
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.BEFORE_FLUSH);
+            prepared();
+            dispatchAfterDirectSyncWrite(new Vector(0.4, 0.36, 0));
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.IN_FLUSH);
+            var older = new PlayerVelocityEvent(victim, new Vector());
+            classic.beginVelocity(older);
+            prepared();
+            classic.velocity(older);
+            assertEquals(new Vector(), older.getVelocity());
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.NONE);
+            Vector newer = new Vector(-0.3, 0.31, 0.1);
+            assertEquals(newer, dispatchAfterDirectSyncWrite(newer).getVelocity());
+            assertEquals(newer, motion.get());
+        }
+    }
+
+    @Test public void leafFollowupExpiresAtTheOriginalTickBoundary() {
+        try (var leaf = mockStatic(LeafVelocityDispatch.class)) {
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.BEFORE_FLUSH);
+            prepared();
+            dispatchAfterDirectSyncWrite(new Vector(0.4, 0.36, 0));
+            tick.incrementAndGet();
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.IN_FLUSH);
+            assertEquals(new Vector(), dispatchAfterDirectSyncWrite(new Vector(0.3, 0.3, 0)).getVelocity());
+            verify(victim, times(1)).setVelocity(any());
+        }
+    }
+
+    @Test public void originalCleanupRemovesItsLeafFollowupWithoutRemovingANewerHit() {
+        var cleanups = new ArrayList<Runnable>();
+        EntityScheduler scheduler = victim.getScheduler();
+        doAnswer(call -> {
+            java.util.function.Consumer<ScheduledTask> cleanup = call.getArgument(1);
+            cleanups.add(() -> cleanup.accept(mock(ScheduledTask.class)));
+            return mock(ScheduledTask.class);
+        }).when(scheduler).runDelayed(any(), any(), any(), anyLong());
+        try (var leaf = mockStatic(LeafVelocityDispatch.class)) {
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.BEFORE_FLUSH);
+            prepared();
+            dispatchAfterDirectSyncWrite(new Vector(0.4, 0.36, 0));
+            cleanups.getFirst().run();
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.IN_FLUSH);
+            assertEquals(new Vector(), dispatchAfterDirectSyncWrite(new Vector(0.3, 0.3, 0)).getVelocity());
+            prepared();
+            cleanups.getFirst().run();
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.NONE);
+            Vector newer = new Vector(-0.3, 0.31, 0.1);
+            assertEquals(newer, dispatchAfterDirectSyncWrite(newer).getVelocity());
+        }
+    }
+
+    @Test public void rodDeliveryNeverArmsALeafMeleeFollowup() {
+        try (var leaf = mockStatic(LeafVelocityDispatch.class)) {
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.BEFORE_FLUSH);
+            pending(rod);
+            Vector first = new Vector(0.4, 0.36, 0);
+            assertEquals(first, dispatchAfterDirectSyncWrite(first).getVelocity());
+            leaf.when(LeafVelocityDispatch::stage).thenReturn(LeafVelocityDispatch.Stage.IN_FLUSH);
+            assertEquals(new Vector(), dispatchAfterDirectSyncWrite(new Vector(0.3, 0.3, 0)).getVelocity());
+            leaf.verifyNoInteractions();
+        }
     }
 }

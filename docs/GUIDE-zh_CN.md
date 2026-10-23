@@ -1,11 +1,11 @@
 # ModernKnockBack 1.21.11 使用与接口
 
-当前发行版本 2.0.5-r4，生产 Java 实现回退至 2.0.4；[回退范围](CLASSIC-ROLLBACK.md)。基线 classic 改善跳跃识别与 KnockbackSync 的实体速度保护，技巧和延迟复测见 [Classic 技巧与延迟](CLASSIC-TECHNIQUES.md)。命中后保留鱼钩和钓线，轻微回弹下落、右键正常收回，每枚鱼钩只触发一次受击；同时屏蔽横扫音效和剑气粒子。普通近战保持原生3.0格距离，保留2.0.1贴身暴击方向修复。classic 鱼钩使用固定0.3格碰撞余量，连续杆及竿接刀默认保护10 tick，保留防挂脸/拉回、即时KB、防互推。源码依据与复测见 [鱼竿修复](CLASSIC-ROD-STACK.md)。自动补全见 [配置补全](CONFIG-COMPLETION.md)，双模式及接口见 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
+当前版本 2.0.5，classic 恢复旧版固定受击倾斜，成功鱼钩原生附着且仅对被钩玩家隐藏，并修复 Leaf 立即同步时第二次速度事件的保护，见 [视角、鱼钩与同步](CLASSIC-FEEL.md)。每枚鱼钩只触发一次受击，右键收杆不拉回目标；继续屏蔽横扫音效和剑气粒子。普通近战保持原生3.0格距离，保留2.0.1贴身暴击方向修复。classic 鱼钩使用固定0.3格碰撞余量，连续杆及竿接刀默认保护10 tick，保留即时KB、防互推。源码依据见 [鱼竿修复](CLASSIC-ROD-STACK.md)，技巧复测见 [Classic 技巧与延迟](CLASSIC-TECHNIQUES.md)。自动补全见 [配置补全](CONFIG-COMPLETION.md)，双模式及接口见 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
 
 ## 安装
 
 1. 使用 Java 21 或更高版本，服务器版本必须为 Minecraft 1.21.11。
-2. 把 `ModernKnockBack-2.0.5-r4.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
+2. 把 `ModernKnockBack-2.0.5.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
 3. 启动后检查 `/mkb status`，编辑当前模式目录 `plugins/ModernKnockBack/modern/` 或 `classic/` 内的配置，用 `/mkb reload` 重载，用 `/kbtest classic` 或 `/kbtest modern` 切换。
 4. 配置错误会拒绝应用，并保留当前已加载配置。启动时配置损坏会明确报错、停止启用，不会生成一份默认配置覆盖损坏文件。
 
@@ -105,7 +105,7 @@ profiles:
 
 “挥杆速度”在服务端可稳定控制的是抛投频率与钩子飞行速度，物品选中与手臂动画仍由客户端处理。1.2.5 在抛投事件中确认新钩子归当前区域拥有后，立即修改初始速度；尚未拥有时回退到钩子的首次实体调度，只缩放一次。距离与寿命监测仍从首个调度 tick 开始，已抛出的钩子沿用抛投时捕获的参数。
 
-classic/combat.yml 三项 hit-interval-ticks、rod-hit-interval-ticks、rod-melee-interval-ticks 默认均为10。连续杆取前两项最大值，接刀取三项最大值；旧4/1/2配置保留，但不能缩短共同受击窗口。默认零伤害杆 noDamageTicks=20，第10 tick降到10；窗口内连续杆/刀不排队、不刷新免疫。受击保护不限制移动。真实伤害、KB或速度取消时撤回自身临时状态；成功杆立即发送一次速度，再补受击效果。classic 飞行鱼钩使用核心线段检测及固定0.3余量；现代路径不改。详见修复文档和验证边界。
+classic/combat.yml 三项 hit-interval-ticks、rod-hit-interval-ticks、rod-melee-interval-ticks 默认均为10。连续杆取前两项最大值，接刀取三项最大值；旧4/1/2配置保留，但不能缩短共同受击窗口。默认零伤害杆 noDamageTicks=20，第10 tick降到10；窗口内连续杆/刀不排队、不刷新免疫。受击保护不限制移动。真实伤害、KB或速度取消时撤回自身临时状态；成功杆立即发送一次速度，仅对被钩玩家隐藏后原生附着，再补固定方向受击效果。出杆者和旁观者仍能看到鱼钩与钓线；取消或免疫接触不附着。classic 飞行鱼钩使用核心线段检测及固定0.3余量；现代路径不改。详见修复文档和验证边界。
 
 modern 的 `impact-strength` 不增加伤害，也不改受伤无敌帧。监听 `ProjectileHitEvent` 且忽略已取消事件，因此 modern 保护插件应在 LOW～HIGH 优先级取消不允许的鱼钩碰撞。classic 则额外调用真实零伤害投射物受击，伤害事件的最终取消状态也会阻止受击反馈和自定义 KB。外层碰撞在 HIGHEST 阶段处理，之后才取消外层碰撞无法回滚已经完成的嵌套伤害流程。
 
@@ -121,6 +121,8 @@ Folia 上钩子、持竿玩家、目标必须由当前区域拥有，否则跳�
 - `before-sync`：允许本插件先调整 Y，但 KnockbackSync 后续可能替换垂直速度，不保证最终等于配置值。
 
 modern 不使用本插件的 `PlayerVelocityEvent` 保护；classic 按 combat.yml 的 protect-velocity-from-sync 在当前速度事件中保留经典最终向量。不拦截速度包、不延迟重写玩家速度，KnockbackSync 继续负责自己的网络与落地同步。其公开 1.3.2 包没有 Folia 支持声明，开发分支已有 Folia 调度适配。**Folia 必须另行安装确实支持 Folia 的 KnockbackSync 构建**；本插件兼容调度不意味着可以让旧版 KnockbackSync 在 Folia 正常加载。`/mkb status` 显示是否加载和共存策略，能发现的无 Folia 声明版本会提示警告；若该插件被服务器拒绝加载，可能显示未安装，需要检查启动日志。
+
+Leaf 启用 `flush-location-while-knockback-player` 时，2.0.5 对原生近战立即刷新 tracker 产生的第二次同步速度事件再保护一次；每次捕获当时实际速度，不在下一 tick 重放，也不改该核心选项。真实网络延迟、客户端插值及反作弊仍需联机检查。
 
 采用 EntityScheduler 执行钩子/玩家任务；磁盘写入走 AsyncScheduler；配置用不可变对象一次性替换；攻击者不属于当前区域时不访问其背包、位置、PDC、元数据等状态，分类退回 unknown。Folia 的跨区射手信息可能未知，因此 arrow.player.bot 等精确路由可能退回 arrow 路由。
 

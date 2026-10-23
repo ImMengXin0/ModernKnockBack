@@ -68,6 +68,7 @@ public final class ServerBridgeProbe {
         require(channel.pipeline().context(overlay) == null, "Handler was not removed");
         channel.finishAndReleaseAll();
         verifySweepEffects(codec, original);
+        verifyHurtAnimation(codec, original);
         System.out.println("Native bridge probe OK (no running server / no client PvP test)");
     }
     private static void verifyProjectileCollision() throws Exception {
@@ -113,15 +114,36 @@ public final class ServerBridgeProbe {
     }
     private static void require(boolean condition, String message) { if (!condition) throw new IllegalStateException(message); }
 
-    private static void verifyRetainedRodContact() {
+    private static void verifyRetainedRodContact() throws Exception {
         var hook = Mockito.mock(net.minecraft.world.entity.projectile.FishingHook.class, Mockito.CALLS_REAL_METHODS);
-        var target = Mockito.mock(net.minecraft.world.entity.Entity.class);
+        var target = Mockito.mock(net.minecraft.server.level.ServerPlayer.class);
+        Mockito.when(target.getId()).thenReturn(77);
+        var world = Mockito.mock(net.minecraft.world.level.Level.class);
+        Mockito.when(world.getEntity(77)).thenReturn(target);
+        Mockito.doReturn(world).when(hook).level();
+        // Use the real metadata storage/setter/callback for the attachment field. Other
+        // entity data and world lifecycle are outside this small native bridge probe.
+        var attachment = net.minecraft.world.entity.projectile.FishingHook.DATA_HOOKED_ENTITY;
+        var items = new net.minecraft.network.syncher.SynchedEntityData.DataItem<?>[attachment.id() + 1];
+        items[attachment.id()] = new net.minecraft.network.syncher.SynchedEntityData.DataItem<>(attachment, 0);
+        var dataConstructor = net.minecraft.network.syncher.SynchedEntityData.class.getDeclaredConstructor(
+                net.minecraft.network.syncher.SyncedDataHolder.class,
+                net.minecraft.network.syncher.SynchedEntityData.DataItem[].class);
+        dataConstructor.setAccessible(true);
+        var metadata = dataConstructor.newInstance(hook, items);
+        Mockito.doReturn(metadata).when(hook).getEntityData();
+        var craftHook = Mockito.mock(org.bukkit.craftbukkit.entity.CraftFishHook.class);
+        Mockito.when(craftHook.getHandle()).thenReturn(hook);
+        Mockito.doCallRealMethod().when(craftHook).setHookedEntity(Mockito.any());
+        Mockito.doCallRealMethod().when(craftHook).getHookedEntity();
+        var craftTarget = Mockito.mock(org.bukkit.craftbukkit.entity.CraftPlayer.class);
+        Mockito.when(craftTarget.getHandle()).thenReturn(target);
+        Mockito.when(target.getBukkitEntity()).thenReturn(craftTarget);
         var hit = new net.minecraft.world.phys.EntityHitResult(target, net.minecraft.world.phys.Vec3.ZERO);
-        var event = new org.bukkit.event.entity.ProjectileHitEvent(Mockito.mock(org.bukkit.entity.FishHook.class),
-                Mockito.mock(org.bukkit.entity.Player.class));
+        var event = new org.bukkit.event.entity.ProjectileHitEvent(craftHook, craftTarget);
         event.setCancelled(true);
         // Exercise the real Paper pre-hit gate, mocking only the external Bukkit dispatch.
-        // It must prevent attachment without requiring removal of the actual bobber.
+        // Rejected contact remains detached; accepted plugin attachment remains attached.
         try (var events = Mockito.mockStatic(org.bukkit.craftbukkit.event.CraftEventFactory.class)) {
             events.when(() -> org.bukkit.craftbukkit.event.CraftEventFactory.callProjectileHitEvent(hook, hit)).thenReturn(event);
             for (int tick : new int[]{1, 2, 20}) {
@@ -130,10 +152,40 @@ public final class ServerBridgeProbe {
                         "Cancelled rod contact entered native hit handling");
                 require(hook.hookedIn == null && !hook.isRemoved(), "Cancelled contact attached or removed the retained bobber");
             }
+            craftHook.setHookedEntity(craftTarget);
+            require(hook.hookedIn == target && craftHook.getHookedEntity() == craftTarget
+                            && metadata.get(attachment) == 78 && metadata.getItem(attachment).isDirty(),
+                    "CraftFishHook attachment did not publish the native entity reference and id+1 metadata");
+            for (int tick : new int[]{21, 22, 40}) {
+                hook.tickCount = tick;
+                require(hook.preHitTargetOrDeflectSelf(hit) == net.minecraft.world.entity.projectile.ProjectileDeflection.NONE,
+                        "Accepted attachment entered an extra native collision");
+                require(hook.hookedIn == target && metadata.get(attachment) == 78 && !hook.isRemoved(),
+                        "Cancelled native collision detached or removed the plugin's accepted attachment");
+            }
         }
-        Mockito.verify(hook, Mockito.never()).setHookedEntity(Mockito.any());
+        craftHook.setHookedEntity(null);
+        require(hook.hookedIn == null && metadata.get(attachment) == 0,
+                "CraftFishHook detach left native attachment metadata behind");
+        hook.setHookedEntity(target);
+        require(hook.hookedIn == target && metadata.get(attachment) == 78,
+                "Native FishingHook attachment disagrees with the Bukkit bridge");
+        hook.setHookedEntity(null);
+        require(hook.hookedIn == null && metadata.get(attachment) == 0,
+                "Native FishingHook detach failed to clear its entity metadata");
         Mockito.verify(hook, Mockito.never()).pullEntity(Mockito.any());
-        System.out.println("Native retained rod OK: repeated cancelled contacts do not attach, remove or pull the bobber/target");
+
+        UUID hookId = UUID.randomUUID(), otherHiddenId = UUID.randomUUID();
+        Mockito.doReturn(hookId).when(hook).getUUID();
+        var hidden = new HashMap<UUID, Set<java.lang.ref.WeakReference<org.bukkit.plugin.Plugin>>>();
+        hidden.put(hookId, Set.of()); hidden.put(otherHiddenId, Set.of());
+        Field visibility = org.bukkit.craftbukkit.entity.CraftPlayer.class.getDeclaredField("invertedVisibilityEntities");
+        visibility.setAccessible(true); visibility.set(craftTarget, hidden);
+        Mockito.doCallRealMethod().when(craftTarget).onEntityRemove(Mockito.any());
+        craftTarget.onEntityRemove(hook);
+        require(!hidden.containsKey(hookId) && hidden.containsKey(otherHiddenId),
+                "Native entity-removal callback did not clear only the removed hook's visibility record");
+        System.out.println("Native retained rod OK: rejected contacts stay detached; accepted native metadata survives cancelled hits without pull; detach and removal visibility cleanup passed");
     }
 
     private static void verifyAttackReach() {
@@ -203,7 +255,7 @@ public final class ServerBridgeProbe {
         var hit = new cn.mx.modernkb.api.HitContext(victim.getUniqueId(), null, null, cn.mx.modernkb.api.HitType.MELEE,
                 cn.mx.modernkb.api.CombatantKind.PLAYER, cn.mx.modernkb.api.CombatantKind.PLAYER,
                 "ENTITY_ATTACK", true, false, false, 1, false);
-        // Leaf optionally takes an immediate tracker path; test the common native melee branch.
+        // Leaf optionally enters the real tracker immediately and dispatches a second event.
         Field flush = null;
         boolean previousFlush = false;
         try {
@@ -212,37 +264,75 @@ public final class ServerBridgeProbe {
         } catch (ClassNotFoundException ignored) { }
         try (var bukkit = Mockito.mockStatic(org.bukkit.Bukkit.class)) {
             bukkit.when(() -> org.bukkit.Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(true);
-            for (boolean protectedMotion : new boolean[]{false, true}) {
-                var classic = new cn.mx.modernkb.combat.ClassicCombat(plugin, () -> config, store,
-                        Mockito.mock(cn.mx.modernkb.combat.CombatTracker.class));
-                victim.setVelocity(desired.clone());
-                classic.applied(victim, new org.bukkit.util.Vector(), config, hit);
-                int[] dispatches = {0};
-                Mockito.doAnswer(call -> {
-                    require(++dispatches[0] == 1, "setVelocity recursively dispatched PlayerVelocityEvent");
-                    var event = (org.bukkit.event.player.PlayerVelocityEvent) call.getArgument(0);
-                    require(event.getVelocity().equals(desired), "Native event no longer starts with supplied old motion");
-                    classic.beginVelocity(event);
-                    // Simulate KBS's direct entity write; it need not mutate the event vector.
-                    victim.setVelocity(new org.bukkit.util.Vector(0.4, 0.8, -0.12));
-                    if (protectedMotion) classic.velocity(event);
-                    else event.setVelocity(desired.clone()); // Reproduce the old event-only protection.
-                    return null;
-                }).when(manager).callEvent(Mockito.any(org.bukkit.event.Event.class));
-                packets.clear();
-                attacker.causeExtraKnockback(nativeVictim, 0,
-                        org.bukkit.craftbukkit.util.CraftVector.toVec3(desired));
-                require(dispatches[0] == 1 && packets.size() == 1, "Native delivery did not send exactly once");
-                double expectedY = protectedMotion ? desired.getY() : 0.8;
-                require(Math.abs(packets.getFirst().getMovement().y - expectedY) < 1e-4,
-                        "Native packet ignored " + (protectedMotion ? "restored" : "directly modified") + " entity motion");
-                require(!nativeVictim.hurtMarked, "Native send left a duplicate velocity notification pending");
-                require(victim.getVelocity().equals(desired), "Native post-send old-motion restoration changed");
+            bukkit.when(org.bukkit.Bukkit::getPluginManager).thenReturn(manager);
+            for (boolean flushEnabled : flush == null ? new boolean[]{false} : new boolean[]{false, true}) {
+                if (flush != null) flush.setBoolean(null, flushEnabled);
+                for (boolean protectedMotion : new boolean[]{false, true}) {
+                    if (flushEnabled) attachNativeVelocityTracker(nativeVictim, level, packets);
+                    var classic = new cn.mx.modernkb.combat.ClassicCombat(plugin, () -> config, store,
+                            Mockito.mock(cn.mx.modernkb.combat.CombatTracker.class));
+                    victim.setVelocity(desired.clone());
+                    classic.applied(victim, new org.bukkit.util.Vector(), config, hit);
+                    int[] dispatches = {0};
+                    Mockito.doAnswer(call -> {
+                        int count = ++dispatches[0];
+                        require(count <= (flushEnabled ? 2 : 1), "setVelocity recursively dispatched another velocity event");
+                        var event = (org.bukkit.event.player.PlayerVelocityEvent) call.getArgument(0);
+                        require(event.getVelocity().equals(desired), "Native event no longer starts with supplied motion");
+                        var expectedStage = !flushEnabled ? LeafVelocityDispatch.Stage.NONE
+                                : count == 1 ? LeafVelocityDispatch.Stage.BEFORE_FLUSH : LeafVelocityDispatch.Stage.IN_FLUSH;
+                        require(LeafVelocityDispatch.stage() == expectedStage, "Leaf native dispatch stage was not recognized");
+                        // The old consume-once implementation protected only event #1 under Leaf.
+                        boolean handle = protectedMotion || flushEnabled && count == 1;
+                        if (handle) classic.beginVelocity(event);
+                        victim.setVelocity(new org.bukkit.util.Vector(0.4, 0.8, -0.12));
+                        if (handle) classic.velocity(event);
+                        else if (!flushEnabled) event.setVelocity(desired.clone()); // Earlier event-only equality bug.
+                        return null;
+                    }).when(manager).callEvent(Mockito.any(org.bukkit.event.Event.class));
+                    packets.clear();
+                    attacker.causeExtraKnockback(nativeVictim, 0,
+                            org.bukkit.craftbukkit.util.CraftVector.toVec3(desired));
+                    require(dispatches[0] == (flushEnabled ? 2 : 1) && packets.size() == 1,
+                            "Native delivery did not send exactly one self velocity packet");
+                    double expectedY = protectedMotion ? desired.getY() : 0.8;
+                    require(Math.abs(packets.getFirst().getMovement().y - expectedY) < 1e-4,
+                            "Native packet ignored " + (protectedMotion ? "restored" : "directly modified") + " entity motion");
+                    require(!nativeVictim.hurtMarked, "Native send left a duplicate velocity notification pending");
+                    require(victim.getVelocity().equals(desired), "Native post-send old-motion restoration changed");
+                }
             }
         } finally {
             if (flush != null) flush.setBoolean(null, previousFlush);
         }
         System.out.println("Native classic velocity OK: event-only equality bug reproduced; restored entity motion sent once without recursive events");
+        if (flush != null) System.out.println("Native Leaf flush OK: two synchronous events reproduced; one-shot protection fails, both dispatches preserve the final self packet");
+    }
+
+    private static void attachNativeVelocityTracker(net.minecraft.server.level.ServerPlayer player,
+            net.minecraft.server.level.ServerLevel level,
+            List<net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket> selfPackets) throws Exception {
+        Mockito.when(player.trackingPosition()).thenReturn(net.minecraft.world.phys.Vec3.ZERO);
+        Mockito.when(player.position()).thenReturn(net.minecraft.world.phys.Vec3.ZERO);
+        Mockito.when(player.getPassengers()).thenReturn(List.of());
+        var data = Mockito.mock(net.minecraft.network.syncher.SynchedEntityData.class);
+        Mockito.when(data.packDirty()).thenReturn(null);
+        Mockito.when(player.getEntityData()).thenReturn(data);
+        var attributes = Mockito.mock(net.minecraft.world.entity.ai.attributes.AttributeMap.class);
+        Mockito.when(attributes.getAttributesToSync()).thenReturn(Set.of());
+        Mockito.when(player.getAttributes()).thenReturn(attributes);
+        var synchronizer = Mockito.mock(net.minecraft.server.level.ServerEntity.Synchronizer.class);
+        Mockito.doAnswer(call -> {
+            if (call.getArgument(0) instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket packet)
+                selfPackets.add(packet);
+            return null;
+        }).when(synchronizer).sendToTrackingPlayersAndSelf(Mockito.any(net.minecraft.network.protocol.Packet.class));
+        // A real ServerEntity executes sendChanges so the production stack classifier is exercised.
+        var serverEntity = new net.minecraft.server.level.ServerEntity(level, player, 1, true, synchronizer, Set.of());
+        var tracked = Mockito.mock(net.minecraft.server.level.ChunkMap.TrackedEntity.class);
+        Field trackingState = tracked.getClass().getField("serverEntity");
+        trackingState.setAccessible(true); trackingState.set(tracked, serverEntity);
+        Mockito.when(player.moonrise$getTrackedEntity()).thenReturn(tracked);
     }
 
     private static void verifySweepEffects(TeamPacketCodec codec, Object team) throws Exception {
@@ -319,6 +409,85 @@ public final class ServerBridgeProbe {
         require(channel.readOutbound() == sweepParticle, "Sweep particles not restored after handler removal");
         channel.finishAndReleaseAll();
         System.out.println("Native sweep effects OK: sweep sound/particles hidden; mixed bundles, promises, unrelated effects and mode/disable restoration passed");
+    }
+
+    private static void verifyHurtAnimation(TeamPacketCodec codec, Object team) throws Exception {
+        var self = new net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket(42, 75f);
+        var other = new net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket(43, -90f);
+        var zero = new net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket(42, 0f);
+        var respawned = new net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket(84, 120f);
+        var sound = new net.minecraft.network.protocol.game.ClientboundSoundPacket(
+                net.minecraft.core.Holder.direct(net.minecraft.sounds.SoundEvents.PLAYER_HURT),
+                net.minecraft.sounds.SoundSource.PLAYERS, 1, 64, 2, 1, 1, 7);
+        var enabled = new AtomicBoolean(true);
+        var state = new CollisionTeams<Object>("Alice", "mkb_hurt", codec.noCollision(null), codec::noCollision);
+        var channel = new EmbeddedChannel();
+        var overlay = new ClientCollisions.Overlay(channel, state, codec, enabled::get,
+                warning -> { throw new IllegalStateException(warning); }, 42);
+        channel.pipeline().addLast("overlay", overlay);
+        overlay.refresh(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+
+        var promise = channel.newPromise();
+        channel.writeAndFlush(self, promise); channel.runPendingTasks();
+        var fixed = (net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) channel.readOutbound();
+        require(promise.isSuccess() && channel.readOutbound() == null, "Hurt animation was dropped, duplicated or left pending");
+        require(fixed != self && fixed.id() == self.id() && fixed.yaw() == 0f,
+                "Classic own hurt animation did not retain its id with fixed tilt");
+        require(self.yaw() == 75f, "Shared own hurt animation packet was mutated");
+        // Exercise the actual native animation method: the fixed angle still starts the
+        // normal ten-tick hurt animation instead of suppressing the damage indication.
+        var nativeVictim = Mockito.mock(net.minecraft.server.level.ServerPlayer.class, Mockito.CALLS_REAL_METHODS);
+        nativeVictim.animateHurt(fixed.yaw());
+        require(nativeVictim.hurtTime == 10 && nativeVictim.hurtDuration == 10 && nativeVictim.getHurtDir() == 0f,
+                "Fixed tilt lost the native hurt animation duration");
+        for (Object packet : List.of(other, zero, sound)) {
+            channel.writeOutbound(packet);
+            require(channel.readOutbound() == packet, "Other entity, fixed animation or hurt sound was modified");
+        }
+
+        var mixed = new net.minecraft.network.protocol.game.ClientboundBundlePacket(List.of(
+                other, self, sound, (net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket) team));
+        channel.writeOutbound(mixed);
+        var filtered = (net.minecraft.network.protocol.game.ClientboundBundlePacket) channel.readOutbound();
+        var children = new ArrayList<Object>(); filtered.subPackets().forEach(children::add);
+        require(children.size() == 4 && children.getFirst() == other && children.get(2) == sound,
+                "Hurt bundle lost another entity, sound or packet order");
+        var bundledHurt = (net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) children.get(1);
+        require(bundledHurt.id() == 42 && bundledHurt.yaw() == 0f && bundledHurt != self,
+                "Own hurt animation in bundle was not copied to fixed tilt");
+        Object parameters = codec.decode(children.getLast()).parameters();
+        require(parameters.getClass().getMethod("getCollisionRule").invoke(parameters).toString().equals("NEVER"),
+                "Hurt bundle broke classic collision rules");
+        var originalChildren = new ArrayList<Object>(); mixed.subPackets().forEach(originalChildren::add);
+        require(originalChildren.equals(List.of(other, self, sound, team)) && self.yaw() == 75f,
+                "Shared hurt bundle or its original animation was mutated");
+
+        enabled.set(false); overlay.refresh(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        for (Object packet : List.of(self, other)) {
+            channel.writeOutbound(packet);
+            require(channel.readOutbound() == packet, "Modern/excluded viewer lost native directional hurt animation");
+        }
+        enabled.set(true); overlay.refresh(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        channel.writeOutbound(self);
+        require(((net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) channel.readOutbound()).yaw() == 0f,
+                "Returning to classic did not restore fixed hurt tilt");
+
+        overlay.selfEntityId(84);
+        channel.writeOutbound(self);
+        require(channel.readOutbound() == self, "Respawn kept rewriting the old entity id");
+        channel.writeOutbound(respawned);
+        var afterRespawn = (net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) channel.readOutbound();
+        require(afterRespawn.id() == 84 && afterRespawn.yaw() == 0f && respawned.yaw() == 120f,
+                "Respawn did not update the local hurt-animation id safely");
+        overlay.remove(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        channel.writeOutbound(respawned);
+        require(channel.readOutbound() == respawned, "Removing handler did not restore directional hurt animation");
+        channel.finishAndReleaseAll();
+        System.out.println("Native hurt animation OK: own classic tilt fixed; animation duration, other entities, bundles, modes, respawn and removal preserved");
     }
 
     private static void verifyRodSweep() throws Exception {
