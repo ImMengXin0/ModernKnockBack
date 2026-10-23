@@ -4,6 +4,7 @@ import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.combat.*;
 import cn.mx.modernkb.config.*;
 import cn.mx.modernkb.compat.RodVelocity;
+import cn.mx.modernkb.compat.RodFeedback;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
 import io.papermc.paper.registry.RegistryAccess;
@@ -152,6 +153,87 @@ public class ClassicCombatTest {
     private EntityKnockbackEvent knockback() {
         return new com.destroystokyo.paper.event.entity.EntityKnockbackByEntityEvent(victim, attacker,
                 EntityKnockbackEvent.Cause.ENTITY_ATTACK, 0.4f, new Vector(0.4, 0.4, 0));
+    }
+    @Test public void nativeMeleeFallbackCannotRepeatKnockbackInsideNineTickWindow() {
+        settings = settings.withMode(CombatMode.CLASSIC, new ClassicSettings(9, 9, true, true, false, true, 2, 9));
+        doAnswer(call -> {
+            if (call.getArgument(0) instanceof KnockbackProfileEvent selection) selection.setCancelled(true);
+            return null;
+        }).when(manager).callEvent(any());
+        // A native impulse may have no positive damage record (zero-damage combat plugin).
+        var first = knockback();
+        listener.knockback(first); classic.finishedKnockback(first);
+        assertFalse(first.isCancelled());
+        for (int tick = 100; tick < 109; tick++) {
+            when(victim.getTicksLived()).thenReturn(tick);
+            var repeated = knockback(); listener.knockback(repeated); classic.finishedKnockback(repeated);
+            assertTrue("Native fallback bypassed the hurt window at tick " + tick, repeated.isCancelled());
+            var leftClick = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(leftClick);
+            assertTrue(leftClick.isCancelled());
+        }
+        when(victim.getTicksLived()).thenReturn(109);
+        var boundary = knockback(); listener.knockback(boundary); classic.finishedKnockback(boundary);
+        assertFalse(boundary.isCancelled());
+    }
+    @Test public void nativeMeleeFallbackDeduplicatesTheAcceptedDamageComponent() {
+        doAnswer(call -> {
+            if (call.getArgument(0) instanceof KnockbackModifyEvent modification) modification.setCancelled(true);
+            return null;
+        }).when(manager).callEvent(any());
+        var damage = damage(); classic.acceptedDamage(damage);
+        var first = knockback(); listener.knockback(first); classic.finishedKnockback(first);
+        assertFalse(first.isCancelled());
+        var extraSprint = knockback(); listener.knockback(extraSprint); classic.finishedKnockback(extraSprint);
+        assertTrue("Declining a custom vector must not re-enable the second native component", extraSprint.isCancelled());
+    }
+    @Test public void customNativeZeroHitCannotRepeatOnTheNextTick() {
+        var first = knockback(); listener.knockback(first); classic.finishedKnockback(first);
+        when(victim.getTicksLived()).thenReturn(101);
+        var nextTick = knockback(); listener.knockback(nextTick); classic.finishedKnockback(nextTick);
+        assertTrue(nextTick.isCancelled());
+        assertEquals(1, classic.applied());
+    }
+    @Test public void lateCancelledNativeFallbackDoesNotLeaveASyntheticWindow() {
+        doAnswer(call -> {
+            if (call.getArgument(0) instanceof KnockbackProfileEvent selection) selection.setCancelled(true);
+            return null;
+        }).when(manager).callEvent(any());
+        var first = knockback(); listener.knockback(first); classic.finishedKnockback(first);
+        first.setCancelled(true); // A later MONITOR listener rejected the actual impulse.
+        var leftClick = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(leftClick);
+        assertFalse(leftClick.isCancelled());
+        var replacement = knockback(); listener.knockback(replacement); classic.finishedKnockback(replacement);
+        assertFalse(replacement.isCancelled());
+    }
+    @Test public void rodFeedbackAndBothAttackPathsShareConfiguredNineTickWindow() {
+        settings = settings.withMode(CombatMode.CLASSIC, new ClassicSettings(9, 9, true, true, false, true, 2, 9));
+        RodVelocity.Transport transport = mock(RodVelocity.Transport.class);
+        RodFeedback feedback = mock(RodFeedback.class);
+        when(feedback.play(any(), any(), any())).thenReturn(true);
+        classic = new ClassicCombat(plugin, () -> settings, store, tracker, RodVelocity.immediate(transport), feedback);
+        listener = new KnockbackListener(() -> settings, store, tracker, () -> false, classic);
+        FishHook first = rodHook(); rodDamage(first, event -> {});
+        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(first, attacker, victim, 0.4));
+        verify(victim).setNoDamageTicks(18);
+        var order = inOrder(transport, feedback);
+        order.verify(transport).send(eq(victim), any());
+        order.verify(feedback).play(eq(victim), eq(rodSource), any());
+        for (int tick = 100; tick < 109; tick++) {
+            when(victim.getTicksLived()).thenReturn(tick);
+            assertEquals(ClassicCombat.RodResult.REJECTED, classic.rodImpactResult(rodHook(), attacker, victim, 0.4));
+            var apiRod = new EntityKnockbackEvent(victim, EntityKnockbackEvent.Cause.UNKNOWN, new Vector(0.5, 0.34, 0));
+            listener.knockback(apiRod); classic.finishedKnockback(apiRod);
+            assertTrue("Explicit rod API must share the accepted hook's window", apiRod.isCancelled());
+            var leftClick = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(leftClick);
+            assertTrue(leftClick.isCancelled());
+        }
+        verify(feedback, times(1)).play(any(), any(), any()); verify(transport, times(1)).send(any(), any());
+        when(victim.getTicksLived()).thenReturn(109);
+        FishHook boundary = rodHook(); rodDamage(boundary, event -> {});
+        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(boundary, attacker, victim, 0.4));
+        verify(feedback, times(2)).play(any(), any(), any());
+        verify(victim, never()).setHealth(anyDouble());
+        assertEquals("Classic rod: contacts=11 | accepted=2 | rejected=9 | feedback=2", classic.rodStatus());
     }
     @Test public void coincidentCriticalHitNeverUsesRandomNativeKnockbackDirection() {
         when(attacker.getLocation()).thenReturn(new Location(null, 0, 64, 0, 0, 80));

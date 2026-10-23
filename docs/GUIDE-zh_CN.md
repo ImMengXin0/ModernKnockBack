@@ -1,11 +1,11 @@
 # ModernKnockBack 1.21.11 使用与接口
 
-当前版本 2.0.5-r2，修复 classic 鱼竿在保留原生 KB 的 API 分支中漏掉受击反馈、撤回保护窗口的问题。保留 2.0.5-r1 的鱼钩微小回弹与速度后反馈，零伤害命中在同一 tick 完成 KB、红闪和受击声音；具体条件与边界见 [视角、鱼钩与同步](CLASSIC-FEEL.md)。每枚鱼钩只触发一次受击，连续杆和竿接刀默认共用10 tick保护，右键收杆不拉回目标。固定受击角度、Leaf 同步保护、横扫屏蔽、原生3.0格近战距离及固定0.3格鱼钩碰撞余量继续保留。1.2.10历史依据见 [鱼竿修复](CLASSIC-ROD-STACK.md)，技巧复测见 [Classic 技巧与延迟](CLASSIC-TECHNIQUES.md)。自动补全见 [配置补全](CONFIG-COMPLETION.md)，双模式及接口见 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
+当前版本2.0.5-r3，补齐classic零伤害鱼钩的原生伤害通知，速度后发送伤害来源与固定方向动画，由客户端产生受击状态和声音。防重复KB检查独立于profile/API向量修改，无正伤害记录的原生击退也受共同窗口约束。已有参数保留，`/mkb status`增加鱼钩接触/接受/拒绝/反馈计数。每枚鱼钩只接触一次，连续杆与接刀默认保护10 tick；已有9/9/9则按9 tick执行，保护结束后允许再次有效命中。左键持竿仍走普通近战。具体行为与真人复测边界见[验证记录](VERIFICATION.md)和[鱼竿说明](CLASSIC-ROD-STACK.md)。鱼钩微小回弹、防拉回、横扫屏蔽、原生3.0格近战距离、固定0.3鱼钩余量和Leaf同步保护保留。配置补全与双模式分别见[配置补全](CONFIG-COMPLETION.md)、[战斗模式](COMBAT-MODES.md)；本文现代公式描述modern路径。
 
 ## 安装
 
 1. 使用 Java 21 或更高版本，服务器版本必须为 Minecraft 1.21.11。
-2. 把 `ModernKnockBack-2.0.5-r2.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
+2. 把 `ModernKnockBack-2.0.5-r3.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
 3. 启动后检查 `/mkb status`，编辑当前模式目录 `plugins/ModernKnockBack/modern/` 或 `classic/` 内的配置，用 `/mkb reload` 重载，用 `/kbtest classic` 或 `/kbtest modern` 切换。
 4. 配置错误会拒绝应用，并保留当前已加载配置。启动时配置损坏会明确报错、停止启用，不会生成一份默认配置覆盖损坏文件。
 

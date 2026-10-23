@@ -1,4 +1,4 @@
-# Classic / ModernKnockBack 2.0.5-r2 / Minecraft 1.21.11
+# Classic / ModernKnockBack 2.0.5-r3 / Minecraft 1.21.11
 # 主要 KB 调参仅 5 项：统一水平、地面 Y、空中 Y、疾跑水平、附加 Y。
 # 数值是目标速度，不是格数。基础、疾跑和附魔统一沿命中方向。
 # 默认覆盖旧动量；不使用蓄力/暴击倍率、现代增量限幅或高度锁定。

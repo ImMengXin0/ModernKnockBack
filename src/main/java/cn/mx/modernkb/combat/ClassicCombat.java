@@ -3,6 +3,7 @@ package cn.mx.modernkb.combat;
 import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.config.*;
 import cn.mx.modernkb.compat.RodVelocity;
+import cn.mx.modernkb.compat.RodFeedback;
 import cn.mx.modernkb.compat.LeafVelocityDispatch;
 import cn.mx.modernkb.rod.ClassicRodContact;
 import com.destroystokyo.paper.event.player.PlayerJumpEvent;
@@ -16,7 +17,6 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
-import org.bukkit.SoundCategory;
 import org.bukkit.attribute.*;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.damage.DamageSource;
@@ -38,6 +38,7 @@ public final class ClassicCombat implements Listener {
         final EntityDamageByEntityEvent damage;
         final ClassicKnockbackMath.Attack attack;
         boolean applied;
+        EntityKnockbackEvent knockback;
         Hit(Settings settings, int tick, EntityDamageByEntityEvent damage, ClassicKnockbackMath.Attack attack) {
             this.settings = settings; this.tick = tick; this.damage = damage; this.attack = attack;
         }
@@ -71,6 +72,7 @@ public final class ClassicCombat implements Listener {
     private final PlayerStore players;
     private final CombatTracker tracker;
     private final RodVelocity rodVelocity;
+    private final RodFeedback rodFeedback;
     private final NamespacedKey speedKey, savedImmunityKey, appliedImmunityKey;
     private final Map<UUID, LivingEntity> managed = new ConcurrentHashMap<>();
     private final Map<UUID, Hit> hits = new ConcurrentHashMap<>();
@@ -83,13 +85,19 @@ public final class ClassicCombat implements Listener {
     private final Map<EntityKnockbackEvent, Prepared> prepared = new ConcurrentHashMap<>();
     private final ThreadLocal<RodScope> rodScope = new ThreadLocal<>();
     private final LongAdder preventedHits = new LongAdder(), preventedComponents = new LongAdder(), applied = new LongAdder();
+    private final LongAdder rodContacts = new LongAdder(), rodAccepted = new LongAdder(), rodFeedbacks = new LongAdder();
 
     public ClassicCombat(Plugin plugin, Supplier<Settings> settings, PlayerStore players, CombatTracker tracker) {
         this(plugin, settings, players, tracker, RodVelocity.deferred());
     }
     public ClassicCombat(Plugin plugin, Supplier<Settings> settings, PlayerStore players, CombatTracker tracker, RodVelocity rodVelocity) {
+        this(plugin, settings, players, tracker, rodVelocity, RodFeedback.bukkit());
+    }
+    public ClassicCombat(Plugin plugin, Supplier<Settings> settings, PlayerStore players, CombatTracker tracker,
+                         RodVelocity rodVelocity, RodFeedback rodFeedback) {
         this.plugin = plugin; this.settings = settings; this.players = players; this.tracker = tracker;
         this.rodVelocity = rodVelocity;
+        this.rodFeedback = rodFeedback;
         speedKey = new NamespacedKey(plugin, "classic_attack_speed");
         savedImmunityKey = new NamespacedKey(plugin, "classic_previous_immunity");
         appliedImmunityKey = new NamespacedKey(plugin, "classic_applied_immunity");
@@ -149,7 +157,8 @@ public final class ClassicCombat implements Listener {
     public static boolean within(int previous, int now, int interval) { return Integer.toUnsignedLong(now - previous) < interval; }
     private boolean blocked(LivingEntity victim, Settings config) {
         Hit hit = hits.get(victim.getUniqueId());
-        return hit != null && hit.settings == config && (hit.damage == null || !hit.damage.isCancelled())
+        return hit != null && hit.settings == config && (hit.damage != null ? !hit.damage.isCancelled()
+                : hit.knockback == null || !hit.knockback.isCancelled())
                 && within(hit.tick, victim.getTicksLived(), config.classic().hitIntervalTicks());
     }
     private boolean blockedByRod(LivingEntity victim, Settings config) {
@@ -242,13 +251,34 @@ public final class ClassicCombat implements Listener {
         }
         return new ClassicKnockbackMath.Attack(direction, facing, sprint, enchantment, punch, strength);
     }
-    /** null means leave this type to modern impulse handling; cancelled means suppress a repeated native component. */
+    private boolean supported(EntityKnockbackEvent event, HitContext context) {
+        return (context.type().melee() || context.type() == HitType.ARROW || context.type() == HitType.CROSSBOW
+                || context.type() == HitType.FISHING_ROD || context.type() == HitType.OTHER_PROJECTILE)
+                && event.getCause() != EntityKnockbackEvent.Cause.EXPLOSION
+                && event.getCause() != EntityKnockbackEvent.Cause.SHIELD_BLOCK;
+    }
+    /** Timing belongs to classic combat, including when an API listener declines vector editing. */
+    public boolean guardKnockback(EntityKnockbackEvent event, HitContext context, Settings config) {
+        if (!config.classicEnabled() || !(event.getEntity() instanceof LivingEntity victim) || !supported(event, context)) return false;
+        RodScope rod = rodScope.get();
+        if (rod != null && rod.victim == victim && context.type() == HitType.FISHING_ROD) return false;
+        Hit hit = hits.get(victim.getUniqueId());
+        boolean acceptedImpulse = hit != null && hit.applied && (hit.knockback == null || !hit.knockback.isCancelled());
+        boolean duplicate = hit != null && hit.settings == config && (hit.damage != null ? !hit.damage.isCancelled()
+                : hit.knockback == null || !hit.knockback.isCancelled())
+                && within(hit.tick, victim.getTicksLived(), config.classic().hitIntervalTicks())
+                && (acceptedImpulse || hit.tick != victim.getTicksLived()
+                    || hit.damage != null && victim.getLastDamageCause() != hit.damage);
+        if ((context.type().melee() || context.type() == HitType.FISHING_ROD) && blockedByRod(victim, config) || duplicate) {
+            event.setCancelled(true); preventedComponents.increment(); return true;
+        }
+        return false;
+    }
+    /** null leaves this type to modern handling; cancellation suppresses a repeated native component. */
     public Calculation calculate(EntityKnockbackEvent event, HitContext context, KnockbackProfile profile, Settings config) {
         if (!config.classicEnabled() || !(event.getEntity() instanceof LivingEntity victim)) return null;
         if (context.type() == HitType.SWEEP && config.classic().disableSweep()) { event.setCancelled(true); return null; }
-        boolean supported = context.type().melee() || context.type() == HitType.ARROW || context.type() == HitType.CROSSBOW
-                || context.type() == HitType.FISHING_ROD || context.type() == HitType.OTHER_PROJECTILE;
-        if (!supported || event.getCause() == EntityKnockbackEvent.Cause.EXPLOSION || event.getCause() == EntityKnockbackEvent.Cause.SHIELD_BLOCK) return null;
+        if (!supported(event, context)) return null;
         UUID id = victim.getUniqueId();
         int now = victim.getTicksLived();
         RodScope rod = rodScope.get();
@@ -261,9 +291,12 @@ public final class ClassicCombat implements Listener {
             event.setCancelled(true); preventedComponents.increment(); return null;
         }
         Hit hit = scopedRod ? null : hits.get(id);
+        if (hit != null && hit.damage == null && hit.knockback != null && hit.knockback.isCancelled()) hit = null;
         if (hit != null && hit.settings == config && hit.tick == now && hit.damage != null && hit.damage.isCancelled()) return null;
         if (hit != null && (hit.settings != config || hit.tick != now || hit.damage != null && victim.getLastDamageCause() != hit.damage)) hit = null;
-        if (hit != null && hit.applied) { event.setCancelled(true); preventedComponents.increment(); return null; }
+        if (hit != null && hit.applied && (hit.knockback == null || !hit.knockback.isCancelled())) {
+            event.setCancelled(true); preventedComponents.increment(); return null;
+        }
         Entity source = event instanceof EntityPushedByEntityAttackEvent attack ? attack.getPushedBy() : null;
         ClassicKnockbackMath.Attack attack = scopedRod ? rod.attack : hit != null ? hit.attack : snapshot(source, victim, context.sprinting(), 1);
         Vector before = victim.getVelocity();
@@ -318,6 +351,9 @@ public final class ClassicCombat implements Listener {
         if (value != null) {
             if (value.settings != settings.get() || scopedRod && rod.accepted) return;
             value.calculation.commit().run();
+            Hit committed = hits.get(victim.getUniqueId());
+            if (committed != null && committed.settings == value.settings && committed.tick == victim.getTicksLived())
+                committed.knockback = event;
             if (scopedRod) rod.accepted = true;
             applied(victim, value.settings, value.context, event);
         } else if (scopedRod && !rod.accepted && rod.settings == settings.get()) {
@@ -325,6 +361,26 @@ public final class ClassicCombat implements Listener {
             // still needs one delivery and the full rod window, without counting a custom edit.
             rod.accepted = true;
             applied(victim, rod.settings, true, event);
+        } else if (value == null && rod == null) {
+            Settings config = settings.get();
+            if (!config.classicEnabled() || !eligible(victim, config)) return;
+            Entity source = event instanceof EntityPushedByEntityAttackEvent attack ? attack.getPushedBy() : null;
+            HitContext context = tracker.context(victim, source, event.getCause().name(), false);
+            if (!supported(event, context)) return;
+            Hit hit = hits.get(victim.getUniqueId());
+            if (hit != null && hit.settings == config && hit.tick == victim.getTicksLived()
+                    && (hit.damage == null || !hit.damage.isCancelled() && victim.getLastDamageCause() == hit.damage)) {
+                hit.applied = true;
+                hit.knockback = event;
+            } else {
+                // No positive damage may exist for a native zero-hit impulse. It still consumes
+                // one classic hit, without changing health or replaying its vector on another tick.
+                Hit synthetic = new Hit(config, victim.getTicksLived(), null,
+                        snapshot(source, victim, context.sprinting(), 1));
+                synthetic.applied = true;
+                synthetic.knockback = event;
+                recordHit(victim, synthetic);
+            }
         }
     }
     private boolean heightLimited(LivingEntity victim, KnockbackProfile profile) {
@@ -415,6 +471,12 @@ public final class ClassicCombat implements Listener {
         return rodImpactResult(hook, shooter, victim, strength) != RodResult.INACTIVE;
     }
     public RodResult rodImpactResult(FishHook hook, Player shooter, LivingEntity victim, double strength) {
+        RodResult result = processRodImpact(hook, shooter, victim, strength);
+        if (result != RodResult.INACTIVE) rodContacts.increment();
+        if (result == RodResult.APPLIED) rodAccepted.increment();
+        return result;
+    }
+    private RodResult processRodImpact(FishHook hook, Player shooter, LivingEntity victim, double strength) {
         Settings config = settings.get();
         if (!config.classicEnabled()) return RodResult.INACTIVE;
         if (!CombatTracker.owns(hook) || !CombatTracker.owns(shooter) || !eligible(victim, config)
@@ -509,14 +571,9 @@ public final class ClassicCombat implements Listener {
                 throw failure;
             }
             if (sent) {
-                if (currentHit.getAsBoolean() && victim instanceof Player
+                if (currentHit.getAsBoolean() && victim instanceof Player player
                         && current.damage.getDamage() == 0 && current.damage.getFinalDamage() == 0) {
-                    // CraftBukkit adds 90 degrees; native yaw 0 matches the fixed 1.8 tilt.
-                    victim.playHurtAnimation(-90f);
-                    if (currentHit.getAsBoolean()) {
-                        var sound = victim.getHurtSound();
-                        if (sound != null) victim.getWorld().playSound(victim, sound, SoundCategory.PLAYERS, 1, 1);
-                    }
+                    if (rodFeedback.play(player, current.damage.getDamageSource(), currentHit)) rodFeedbacks.increment();
                 }
                 return RodResult.APPLIED;
             }
@@ -613,6 +670,11 @@ public final class ClassicCombat implements Listener {
     public long preventedHits() { return preventedHits.sum(); }
     public long preventedComponents() { return preventedComponents.sum(); }
     public long applied() { return applied.sum(); }
+    public String rodStatus() {
+        long accepted = rodAccepted.sum(), contacts = rodContacts.sum();
+        return "Classic rod: contacts=" + contacts + " | accepted=" + accepted
+                + " | rejected=" + (contacts - accepted) + " | feedback=" + rodFeedbacks.sum();
+    }
     public void close() {
         // Paper owns all entities here. Folia disallows scheduling new plugin tasks during disable;
         // persistent immunity markers are recovered on the next enable/join, modifiers are transient.

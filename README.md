@@ -1,4 +1,4 @@
-# ModernKnockBack 2.0.5-r2
+# ModernKnockBack 2.0.5-r3
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -24,7 +24,9 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.5-r2.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.5-r3.jar`。
+
+2.0.5-r3 为 classic 零伤害鱼钩补齐原生 `ClientboundDamageEventPacket`，在即时速度之后，将伤害来源通知与固定方向受击动画一起发给受击者和追踪者。客户端按原生伤害通知处理受击状态与声音，不再另播一遍服务端声音；不再次调用 damage 或修改血量。共同受击检查移到 profile/API 修改之前，修复无正伤害记录的原生击退在下一 tick 重复生效、以及保留原生向量时跳过防重复组件的问题。`/mkb status` 增加鱼钩接触、接受、拒绝和反馈发送计数，便于实服核对。原配置保留：若三项间隔都是9，则保护到第9 tick边界；窗口结束后仍可再次有效命中。左键持竿沿用普通近战，零伤害受击指右键抛出的鱼钩。三核心离线检查与293项测试通过，真人红闪、声音和连续出杆仍须目标服复测；r2 的测试通过并未代表其在目标服已达到效果。
 
 2.0.5-r2 修复 classic 鱼竿在 API 取消自定义修改、API 选到不存在的 profile 或 profile 禁用时的接受判定：这些情况按接口约定保留原生 KB，旧实现却把已发生的击退判为失败，撤回受击保护并漏掉即时速度和受击反馈。现在按最终原生 KB 事件是否接受来完成命中，保留该次原生向量，并发送一次速度、一次红闪和受击声音；连续杆与接刀继续共用默认 10 tick 窗口。真正取消碰撞、伤害、原生 KB 或速度事件仍会阻止对应处理。保留 2.0.5-r1 的鱼钩微小回弹及速度后反馈顺序，零扣血、同 tick 完成，不增加延迟或配置项。
 

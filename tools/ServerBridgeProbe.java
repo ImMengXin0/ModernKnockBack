@@ -345,6 +345,14 @@ public final class ServerBridgeProbe {
             return null;
         }).when(manager).callEvent(Mockito.any(org.bukkit.event.Event.class));
         RodVelocity delivery = RodVelocity.forServer();
+        RodFeedback feedback = RodFeedback.forServer();
+        var angler = Mockito.mock(net.minecraft.server.level.ServerPlayer.class);
+        var bobber = Mockito.mock(net.minecraft.world.entity.projectile.FishingHook.class);
+        Mockito.when(angler.getId()).thenReturn(17); Mockito.when(bobber.getId()).thenReturn(31);
+        var damageType = net.minecraft.core.Holder.direct(new net.minecraft.world.damagesource.DamageType("thrown", 0f));
+        var nativeSource = new net.minecraft.world.damagesource.DamageSource(damageType, bobber, angler);
+        var apiSource = Mockito.mock(org.bukkit.craftbukkit.damage.CraftDamageSource.class);
+        Mockito.when(apiSource.getHandle()).thenReturn(nativeSource);
         try (var bukkit = Mockito.mockStatic(org.bukkit.Bukkit.class)) {
             bukkit.when(() -> org.bukkit.Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(true);
             bukkit.when(org.bukkit.Bukkit::getPluginManager).thenReturn(manager);
@@ -355,7 +363,7 @@ public final class ServerBridgeProbe {
                 boolean delivered = delivery.deliver(victim, before, () -> true);
                 // Preserve the existing production order: send the accepted movement first,
                 // then issue visual feedback immediately in the same task, with no tick delay.
-                if (delivered) victim.playHurtAnimation(-90f);
+                if (delivered) require(feedback.play(victim, apiSource, () -> true), "Accepted rod lost its damage notification");
                 require(delivered != cancel && dispatches[0] == 1, "Rod acceptance or velocity event count changed");
                 if (cancel) {
                     require(selfPackets.isEmpty() && observerPackets.isEmpty(),
@@ -365,10 +373,21 @@ public final class ServerBridgeProbe {
                     for (var packets : List.of(selfPackets, observerPackets)) {
                         require(packets.size() == 2
                                         && packets.get(0) instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket
-                                        && packets.get(1) instanceof net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket,
-                                "Victim/observer must receive one motion packet followed by one hurt packet");
+                                        && packets.get(1) instanceof net.minecraft.network.protocol.game.ClientboundBundlePacket,
+                                "Victim/observer must receive motion followed by the complete hurt notification");
                         var velocity = (net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket) packets.get(0);
-                        var hurt = (net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) packets.get(1);
+                        var children = new ArrayList<net.minecraft.network.protocol.Packet<?>>();
+                        ((net.minecraft.network.protocol.game.ClientboundBundlePacket) packets.get(1)).subPackets().forEach(children::add);
+                        require(children.size() == 2
+                                        && children.get(0) instanceof net.minecraft.network.protocol.game.ClientboundDamageEventPacket
+                                        && children.get(1) instanceof net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket,
+                                "Rod needs the native damage notification before the fixed hurt tilt");
+                        var damage = (net.minecraft.network.protocol.game.ClientboundDamageEventPacket) children.get(0);
+                        var hurt = (net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) children.get(1);
+                        require(damage.entityId() == 42 && damage.sourceCauseId() == 17 && damage.sourceDirectId() == 31
+                                        && damage.sourceType() == damageType
+                                        && damage.sourceType().value().effects() == net.minecraft.world.damagesource.DamageEffects.HURT,
+                                "Rod damage notification lost victim, angler, hook or ordinary hurt sound");
                         require(hurt.id() == 42 && hurt.yaw() == 0 && velocity.getId() == 42,
                                 "Rod feedback changed entity identity or legacy hurt direction");
                         require(velocity.getMovement().distanceTo(org.bukkit.craftbukkit.util.CraftVector.toVec3(desired)) < 1e-4,
@@ -408,6 +427,14 @@ public final class ServerBridgeProbe {
                             && observerPackets.getFirst() == selfPackets.getFirst(),
                     "Reentrant packet callback duplicated or dropped the accepted rod movement");
             newImpulseDuringSend.set(false); nativeVictim.hurtMarked = false;
+            selfPackets.clear(); observerPackets.clear();
+            require(!feedback.play(victim, apiSource, () -> false) && selfPackets.isEmpty() && observerPackets.isEmpty(),
+                    "A stale/cancelled hit emitted damage feedback");
+            // The direct-connection fallback must also retain the entire damage notification.
+            Mockito.when(nativeVictim.moonrise$getTrackedEntity()).thenReturn(null);
+            require(feedback.play(victim, apiSource, () -> true) && selfPackets.size() == 1 && observerPackets.isEmpty()
+                            && selfPackets.getFirst() instanceof net.minecraft.network.protocol.game.ClientboundBundlePacket,
+                    "Untracked rod target did not receive the damage bundle through its connection");
         }
         require(Mockito.mockingDetails(victim).getInvocations().stream().noneMatch(invocation ->
                         Set.of("damage", "setHealth").contains(invocation.getMethod().getName())),
@@ -424,7 +451,7 @@ public final class ServerBridgeProbe {
         require(nativeVictim.hurtTime == 10 && nativeVictim.hurtDuration == 10
                         && nativeVictim.invulnerableTime == immunity,
                 "Native hurt animation did not set its ten-tick visual state independently of damage immunity");
-        System.out.println("Native rod feedback OK: real motion then Craft hurt packet reaches self/observer; cancelled velocity emits neither; next native tracker update sends no second self impulse; reentrant send preserves new impulse; ten-tick hurt state without extra damage");
+        System.out.println("Native rod feedback OK: real motion then damage+fixed-hurt bundle reaches self/observer with angler/hook attribution and native hurt sound; cancelled/stale hits emit neither; connection fallback works; next tracker update sends no second self impulse; no extra damage/health calls");
     }
 
     private static void attachNativeVelocityTracker(net.minecraft.server.level.ServerPlayer player,
