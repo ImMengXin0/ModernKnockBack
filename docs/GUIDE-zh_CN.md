@@ -1,11 +1,11 @@
 # ModernKnockBack 1.21.11 使用与接口
 
-当前版本 2.0.5-r1，撤回 2.0.6，以 2.0.5 为基础恢复此前鱼钩命中后轻微回弹的表现；保留固定受击角度和 Leaf 立即同步时第二次速度事件的保护，见 [视角、鱼钩与同步](CLASSIC-FEEL.md)。每枚鱼钩只触发一次受击，右键收杆不拉回目标；继续屏蔽横扫音效和剑气粒子。普通近战保持原生3.0格距离，保留2.0.1贴身暴击方向修复。classic 鱼钩使用固定0.3格碰撞余量，连续杆及竿接刀默认保护10 tick，保留即时KB、防互推。源码依据见 [鱼竿修复](CLASSIC-ROD-STACK.md)，技巧复测见 [Classic 技巧与延迟](CLASSIC-TECHNIQUES.md)。自动补全见 [配置补全](CONFIG-COMPLETION.md)，双模式及接口见 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
+当前版本 2.0.5-r2，修复 classic 鱼竿在保留原生 KB 的 API 分支中漏掉受击反馈、撤回保护窗口的问题。保留 2.0.5-r1 的鱼钩微小回弹与速度后反馈，零伤害命中在同一 tick 完成 KB、红闪和受击声音；具体条件与边界见 [视角、鱼钩与同步](CLASSIC-FEEL.md)。每枚鱼钩只触发一次受击，连续杆和竿接刀默认共用10 tick保护，右键收杆不拉回目标。固定受击角度、Leaf 同步保护、横扫屏蔽、原生3.0格近战距离及固定0.3格鱼钩碰撞余量继续保留。1.2.10历史依据见 [鱼竿修复](CLASSIC-ROD-STACK.md)，技巧复测见 [Classic 技巧与延迟](CLASSIC-TECHNIQUES.md)。自动补全见 [配置补全](CONFIG-COMPLETION.md)，双模式及接口见 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
 
 ## 安装
 
 1. 使用 Java 21 或更高版本，服务器版本必须为 Minecraft 1.21.11。
-2. 把 `ModernKnockBack-2.0.5-r1.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
+2. 把 `ModernKnockBack-2.0.5-r2.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
 3. 启动后检查 `/mkb status`，编辑当前模式目录 `plugins/ModernKnockBack/modern/` 或 `classic/` 内的配置，用 `/mkb reload` 重载，用 `/kbtest classic` 或 `/kbtest modern` 切换。
 4. 配置错误会拒绝应用，并保留当前已加载配置。启动时配置损坏会明确报错、停止启用，不会生成一份默认配置覆盖损坏文件。
 
@@ -107,6 +107,8 @@ profiles:
 
 classic/combat.yml 三项 hit-interval-ticks、rod-hit-interval-ticks、rod-melee-interval-ticks 默认均为10。连续杆取前两项最大值，接刀取三项最大值；旧4/1/2配置保留，但不能缩短共同受击窗口。默认零伤害杆 noDamageTicks=20，第10 tick降到10；窗口内连续杆/刀不排队、不刷新免疫。受击保护不限制移动。真实伤害、KB或速度取消时撤回自身临时状态；成功杆沿用 2.0.5 的顺序，立即发送一次速度，再补固定方向受击效果。2.0.5-r1 恢复保留鱼钩与钓线并轻微向后、向下回弹，回弹只作用于钩子，不更改玩家 KB；取消或免疫接触也不允许同钩再次受击。classic 飞行鱼钩使用核心线段检测及固定0.3余量；现代路径不改。详见修复文档和验证边界。
 
+2.0.5-r2 对 API 取消自定义修改、API 选择不存在或禁用 profile 的情况保留原生 KB，并按实际接受的原生事件完成即时速度、一次红闪/受击声和共同保护。旧实现只承认自定义修改成功，可能在核心已击退后撤回保护并漏掉反馈；本次修复这一分支。真正取消原生 KB 或最终速度事件仍不会强制反馈。同一杆处理中的嵌套 KB 被拒绝，持续出杆不会在保护期内追加或排队 KB。插件自身调用零伤害，不为制造红闪增加生命值伤害；其他插件主动修改伤害事件仍遵守其最终事件结果。
+
 modern 的 `impact-strength` 不增加伤害，也不改受伤无敌帧。监听 `ProjectileHitEvent` 且忽略已取消事件，因此 modern 保护插件应在 LOW～HIGH 优先级取消不允许的鱼钩碰撞。classic 则额外调用真实零伤害投射物受击，伤害事件的最终取消状态也会阻止受击反馈和自定义 KB。外层碰撞在 HIGHEST 阶段处理，之后才取消外层碰撞无法回滚已经完成的嵌套伤害流程。
 
 Folia 上钩子、持竿玩家、目标必须由当前区域拥有，否则跳过额外碰撞 KB，不排队补打一击。范围与生命周期监测只操作钩子自己的区域。正常鱼咬钩失败（FAILED_ATTEMPT）不会被误认作收杆。
@@ -187,3 +189,5 @@ String name = api.getProfile(uuid);
 HitContext 仅含 UUID、类别和数值快照，不含可随意跨线程操作的玩家对象。向量 getter 返回副本，修改副本后需 setter 写回。无效配置名、已禁用配置会保留原生；自定义向量必须为有限数值。扩展事件监听器需要自行遵守 Folia 区域规则。不要在事件里把原有速度再加进 impulse，否则会重复叠加。
 
 自定义事件取消与原生 Paper 事件取消不同：前者不接管该次击退，后者由其他插件决定是否取消整个原生击退。
+
+classic 鱼竿也遵守该约定：取消 `KnockbackProfileEvent` / `KnockbackModifyEvent` 或通过 API 选到不存在、禁用的 profile，只放弃自定义向量，仍保留实际原生 KB、零伤害反馈和共同保护。若要阻止整次击退，应取消对应原生 Paper KB 事件；若要拦截这次命中，应按保护事件规则取消碰撞或伤害。配置文件中的无效路由仍会在加载校验时被拒绝，不属于这里的 API 动态选择分支。

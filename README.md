@@ -1,4 +1,4 @@
-# ModernKnockBack 2.0.5-r1
+# ModernKnockBack 2.0.5-r2
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -24,7 +24,11 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.5-r1.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.5-r2.jar`。
+
+2.0.5-r2 修复 classic 鱼竿在 API 取消自定义修改、API 选到不存在的 profile 或 profile 禁用时的接受判定：这些情况按接口约定保留原生 KB，旧实现却把已发生的击退判为失败，撤回受击保护并漏掉即时速度和受击反馈。现在按最终原生 KB 事件是否接受来完成命中，保留该次原生向量，并发送一次速度、一次红闪和受击声音；连续杆与接刀继续共用默认 10 tick 窗口。真正取消碰撞、伤害、原生 KB 或速度事件仍会阻止对应处理。保留 2.0.5-r1 的鱼钩微小回弹及速度后反馈顺序，零扣血、同 tick 完成，不增加延迟或配置项。
+
+本次重新核查了 1.2.10：2.0 发布时曾验证 40 个战斗、鱼竿与兼容类的 SHA256 与 1.2.10 一致，当前继续保留其零伤害受击、固定 0.3 碰撞余量和共同受击窗口。该依据确认历史逻辑，不代表已完成当前版本的真人视效验证；详见 [鱼竿修复](docs/CLASSIC-ROD-STACK.md) 和 [验证记录](docs/VERIFICATION.md)。
 
 2.0.5-r1 撤回 2.0.6，以 2.0.5 为基础恢复 2.0.4 的鱼钩轻微回弹表现。回弹只作用于鱼钩，玩家 KB 数值和受击间隔保持原配置；保留 2.0.5 的固定受击角度、Leaf 同步保护和生命周期清理。受击效果回到速度发送之后播放。替换 Jar 并正常重启即可，无需重置配置。详见 [视角、鱼钩与同步说明](docs/CLASSIC-FEEL.md)。
 

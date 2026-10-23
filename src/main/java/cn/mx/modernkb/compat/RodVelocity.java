@@ -16,7 +16,7 @@ public interface RodVelocity {
     /** Compatibility for callers that use ClassicCombat independently of the plugin bootstrap. */
     static RodVelocity deferred() {
         return (player, before, current) -> {
-            if (!current.getAsBoolean()) return false;
+            if (!CombatTracker.owns(player) || !current.getAsBoolean()) return false;
             player.setVelocity(player.getVelocity());
             return true;
         };
@@ -33,7 +33,7 @@ public interface RodVelocity {
             var event = new PlayerVelocityEvent(player, player.getVelocity().clone());
             Bukkit.getPluginManager().callEvent(event);
             // A nested hit or mode change owns its new velocity. Never overwrite or clear it.
-            if (!current.getAsBoolean()) return false;
+            if (!CombatTracker.owns(player) || !current.getAsBoolean()) return false;
             if (event.isCancelled()) {
                 transport.discard(player, before);
                 return false;
@@ -64,10 +64,11 @@ public interface RodVelocity {
                     target.setVelocity(velocity);
                     Object message = motion.newInstance(nativePlayer);
                     Object tracking = tracked.invoke(nativePlayer);
+                    // Consume this notification before packet callbacks can install another hit
+                    // or move the player to another region. Never clear that newer notification.
+                    dirty.setBoolean(nativePlayer, false);
                     if (tracking != null) broadcast.invoke(tracking, message);
                     else send.invoke(connection.get(nativePlayer), message);
-                    // The tracker must not send this impulse again on its next tick.
-                    dirty.setBoolean(nativePlayer, false);
                 } catch (ReflectiveOperationException ex) { throw new IllegalStateException("Cannot flush classic rod velocity", ex); }
             }
             @Override public void discard(Player target, Vector before) {

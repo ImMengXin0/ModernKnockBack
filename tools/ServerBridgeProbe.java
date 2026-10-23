@@ -16,6 +16,7 @@ public final class ServerBridgeProbe {
         verifyRetainedRodContact();
         verifyAttackReach();
         verifyClassicVelocityDelivery();
+        verifyRodFeedback();
         RodVelocity.forServer();
         TeamPacketCodec codec = new TeamPacketCodec();
         Class<?> boardClass = Class.forName("net.minecraft.world.scores.Scoreboard");
@@ -256,6 +257,174 @@ public final class ServerBridgeProbe {
         }
         System.out.println("Native classic velocity OK: event-only equality bug reproduced; restored entity motion sent once without recursive events");
         if (flush != null) System.out.println("Native Leaf flush OK: two synchronous events reproduced; one-shot protection fails, both dispatches preserve the final self packet");
+    }
+
+    private static void verifyRodFeedback() throws Exception {
+        var selfPackets = new ArrayList<net.minecraft.network.protocol.Packet<?>>();
+        var observerPackets = new ArrayList<net.minecraft.network.protocol.Packet<?>>();
+        var desired = new org.bukkit.util.Vector(0.4, 0.36075, -0.12);
+        var before = new org.bukkit.util.Vector(0.1, 0, 0.02);
+        var motion = new java.util.concurrent.atomic.AtomicReference<>(net.minecraft.world.phys.Vec3.ZERO);
+        var newImpulseDuringSend = new AtomicBoolean(false);
+        var nativeVictim = Mockito.mock(net.minecraft.server.level.ServerPlayer.class);
+        Mockito.when(nativeVictim.getId()).thenReturn(42);
+        Mockito.when(nativeVictim.getDeltaMovement()).thenAnswer(call -> motion.get());
+        Mockito.doAnswer(call -> { motion.set(call.getArgument(0)); return null; })
+                .when(nativeVictim).setDeltaMovement(Mockito.any(net.minecraft.world.phys.Vec3.class));
+        nativeVictim.connection = Mockito.mock(net.minecraft.server.network.ServerGamePacketListenerImpl.class);
+        Mockito.doAnswer(call -> {
+            net.minecraft.network.protocol.Packet<?> packet = call.getArgument(0);
+            selfPackets.add(packet);
+            if (newImpulseDuringSend.get()
+                    && packet instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket)
+                nativeVictim.hurtMarked = true; // Another accepted impulse from a synchronous packet callback.
+            return null;
+        })
+                .when(nativeVictim.connection).send(Mockito.any(net.minecraft.network.protocol.Packet.class));
+        var observer = Mockito.mock(net.minecraft.server.network.ServerGamePacketListenerImpl.class);
+        Mockito.doAnswer(call -> { observerPackets.add(call.getArgument(0)); return null; })
+                .when(observer).send(Mockito.any(net.minecraft.network.protocol.Packet.class));
+
+        // Execute real tracking broadcasts, including the core's self-recipient branch.
+        // Leaf exposes a cached seenBy array; ASPaper/Folia iterate the same seenBy set.
+        var tracked = Mockito.mock(net.minecraft.server.level.ChunkMap.TrackedEntity.class, call ->
+                call.getMethod().getName().equals("seenBy")
+                        ? new net.minecraft.server.network.ServerPlayerConnection[]{observer} : call.callRealMethod());
+        Field trackedEntity = net.minecraft.server.level.ChunkMap.TrackedEntity.class.getDeclaredField("entity");
+        trackedEntity.setAccessible(true); trackedEntity.set(tracked, nativeVictim);
+        Field seenBy = net.minecraft.server.level.ChunkMap.TrackedEntity.class.getField("seenBy");
+        seenBy.setAccessible(true); seenBy.set(tracked, new HashSet<>(Set.of(observer)));
+        Mockito.when(nativeVictim.moonrise$getTrackedEntity()).thenReturn(tracked);
+        var chunks = Mockito.mock(net.minecraft.server.level.ChunkMap.class, Mockito.CALLS_REAL_METHODS);
+        var entityMap = new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<net.minecraft.server.level.ChunkMap.TrackedEntity>();
+        entityMap.put(42, tracked);
+        try {
+            Field chunkEntities = net.minecraft.server.level.ChunkMap.class.getDeclaredField("entityMap");
+            chunkEntities.setAccessible(true); chunkEntities.set(chunks, entityMap);
+        } catch (NoSuchFieldException ignored) {
+            // Folia obtains tracking directly from entity.moonrise$getTrackedEntity().
+        }
+        var cache = Mockito.mock(net.minecraft.server.level.ServerChunkCache.class, Mockito.CALLS_REAL_METHODS);
+        Field chunkMap = net.minecraft.server.level.ServerChunkCache.class.getDeclaredField("chunkMap");
+        chunkMap.setAccessible(true); chunkMap.set(cache, chunks);
+        var world = Mockito.mock(net.minecraft.server.level.ServerLevel.class);
+        Mockito.when(world.getChunkSource()).thenReturn(cache);
+        Mockito.when(nativeVictim.level()).thenReturn(world);
+
+        // A real tracker will later process needsSync even after the immediate send has
+        // cleared hurtMarked. Its normal observer update is distinct from a new self KB.
+        Mockito.when(nativeVictim.trackingPosition()).thenReturn(net.minecraft.world.phys.Vec3.ZERO);
+        Mockito.when(nativeVictim.position()).thenReturn(net.minecraft.world.phys.Vec3.ZERO);
+        Mockito.when(nativeVictim.getPassengers()).thenReturn(List.of());
+        var data = Mockito.mock(net.minecraft.network.syncher.SynchedEntityData.class);
+        Mockito.when(data.packDirty()).thenReturn(null);
+        Mockito.when(nativeVictim.getEntityData()).thenReturn(data);
+        var attributes = Mockito.mock(net.minecraft.world.entity.ai.attributes.AttributeMap.class);
+        Mockito.when(attributes.getAttributesToSync()).thenReturn(new HashSet<>());
+        Mockito.when(nativeVictim.getAttributes()).thenReturn(attributes);
+        var tracker = new net.minecraft.server.level.ServerEntity(world, nativeVictim, 1, true,
+                tracked, Set.of(observer));
+        Field serverEntity = net.minecraft.server.level.ChunkMap.TrackedEntity.class.getField("serverEntity");
+        serverEntity.setAccessible(true); serverEntity.set(tracked, tracker);
+
+        var victim = Mockito.mock(org.bukkit.craftbukkit.entity.CraftPlayer.class);
+        Field entity = org.bukkit.craftbukkit.entity.CraftEntity.class.getDeclaredField("entity");
+        entity.setAccessible(true); entity.set(victim, nativeVictim);
+        Mockito.when(victim.getHandle()).thenReturn(nativeVictim);
+        Mockito.when(victim.getEntityId()).thenReturn(42);
+        Mockito.doCallRealMethod().when(victim).getVelocity();
+        Mockito.doCallRealMethod().when(victim).setVelocity(Mockito.any(org.bukkit.util.Vector.class));
+        Mockito.doCallRealMethod().when(victim).playHurtAnimation(Mockito.anyFloat());
+        var manager = Mockito.mock(org.bukkit.plugin.PluginManager.class);
+        var cancelled = new AtomicBoolean(false);
+        int[] dispatches = {0};
+        Mockito.doAnswer(call -> {
+            dispatches[0]++;
+            require(selfPackets.isEmpty() && observerPackets.isEmpty(), "Rod feedback was sent before final velocity acceptance");
+            ((org.bukkit.event.player.PlayerVelocityEvent) call.getArgument(0)).setCancelled(cancelled.get());
+            return null;
+        }).when(manager).callEvent(Mockito.any(org.bukkit.event.Event.class));
+        RodVelocity delivery = RodVelocity.forServer();
+        try (var bukkit = Mockito.mockStatic(org.bukkit.Bukkit.class)) {
+            bukkit.when(() -> org.bukkit.Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(true);
+            bukkit.when(org.bukkit.Bukkit::getPluginManager).thenReturn(manager);
+            for (boolean cancel : new boolean[]{false, true}) {
+                cancelled.set(cancel); dispatches[0] = 0;
+                selfPackets.clear(); observerPackets.clear();
+                victim.setVelocity(desired.clone());
+                boolean delivered = delivery.deliver(victim, before, () -> true);
+                // Preserve the existing production order: send the accepted movement first,
+                // then issue visual feedback immediately in the same task, with no tick delay.
+                if (delivered) victim.playHurtAnimation(-90f);
+                require(delivered != cancel && dispatches[0] == 1, "Rod acceptance or velocity event count changed");
+                if (cancel) {
+                    require(selfPackets.isEmpty() && observerPackets.isEmpty(),
+                            "Cancelled rod velocity emitted hurt feedback or movement");
+                    require(victim.getVelocity().equals(before), "Cancelled rod velocity was not restored");
+                } else {
+                    for (var packets : List.of(selfPackets, observerPackets)) {
+                        require(packets.size() == 2
+                                        && packets.get(0) instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket
+                                        && packets.get(1) instanceof net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket,
+                                "Victim/observer must receive one motion packet followed by one hurt packet");
+                        var velocity = (net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket) packets.get(0);
+                        var hurt = (net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) packets.get(1);
+                        require(hurt.id() == 42 && hurt.yaw() == 0 && velocity.getId() == 42,
+                                "Rod feedback changed entity identity or legacy hurt direction");
+                        require(velocity.getMovement().distanceTo(org.bukkit.craftbukkit.util.CraftVector.toVec3(desired)) < 1e-4,
+                                "Rod feedback changed the delivered knockback vector");
+                    }
+                    require(selfPackets.getLast() == observerPackets.getLast(), "Native hurt broadcast failed to reach both recipients");
+                    require(victim.getVelocity().equals(desired), "Accepted feedback changed server motion");
+                    selfPackets.clear(); observerPackets.clear();
+                    require(!nativeVictim.hurtMarked, "Immediate rod delivery did not clear the pending self impulse");
+                    // Explicitly exercise this independent dirty flag, including cores that
+                    // filter redundant observer motion. Do not classify observer sync as KB.
+                    nativeVictim.needsSync = true;
+                    tracker.sendChanges();
+                    require(dispatches[0] == 1 && selfPackets.stream().noneMatch(packet ->
+                                    packet instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket
+                                            || packet instanceof net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket),
+                            "Post-delivery native tracking repeated the self impulse/feedback: " + selfPackets);
+                    require(observerPackets.stream().noneMatch(packet ->
+                                    packet instanceof net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket),
+                            "Post-delivery native tracking repeated the hurt animation");
+                    require(observerPackets.stream().filter(packet ->
+                                    packet instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket).count() <= 1,
+                            "Post-delivery native tracking duplicated its normal observer motion update");
+                    require(!nativeVictim.needsSync, "Native tracker did not consume the normal observer sync flag");
+                }
+                require(!nativeVictim.hurtMarked, "Rod delivery left a second velocity update pending");
+            }
+            cancelled.set(false); dispatches[0] = 0;
+            selfPackets.clear(); observerPackets.clear();
+            newImpulseDuringSend.set(true);
+            victim.setVelocity(desired.clone());
+            require(delivery.deliver(victim, before, () -> true) && dispatches[0] == 1,
+                    "A new impulse during packet delivery changed the accepted rod result");
+            require(nativeVictim.hurtMarked, "Old rod send cleared a new impulse marked by a synchronous packet callback");
+            require(selfPackets.size() == 1 && observerPackets.size() == 1
+                            && selfPackets.getFirst() instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket
+                            && observerPackets.getFirst() == selfPackets.getFirst(),
+                    "Reentrant packet callback duplicated or dropped the accepted rod movement");
+            newImpulseDuringSend.set(false); nativeVictim.hurtMarked = false;
+        }
+        require(Mockito.mockingDetails(victim).getInvocations().stream().noneMatch(invocation ->
+                        Set.of("damage", "setHealth").contains(invocation.getMethod().getName())),
+                "Rod feedback called a Bukkit damage or health setter");
+        require(Mockito.mockingDetails(nativeVictim).getInvocations().stream().noneMatch(invocation ->
+                        Set.of("hurt", "hurtServer", "actuallyHurt", "setHealth").contains(invocation.getMethod().getName())),
+                "Rod feedback called a native damage or health setter");
+        // This shared native method also exists in the vanilla client; full client rendering
+        // is outside this offline probe. No damage call is necessary to start hurtTime.
+        Mockito.doCallRealMethod().when(nativeVictim).animateHurt(Mockito.anyFloat());
+        nativeVictim.hurtTime = 0; nativeVictim.hurtDuration = 0;
+        int immunity = nativeVictim.invulnerableTime;
+        nativeVictim.animateHurt(0);
+        require(nativeVictim.hurtTime == 10 && nativeVictim.hurtDuration == 10
+                        && nativeVictim.invulnerableTime == immunity,
+                "Native hurt animation did not set its ten-tick visual state independently of damage immunity");
+        System.out.println("Native rod feedback OK: real motion then Craft hurt packet reaches self/observer; cancelled velocity emits neither; next native tracker update sends no second self impulse; reentrant send preserves new impulse; ten-tick hurt state without extra damage");
     }
 
     private static void attachNativeVelocityTracker(net.minecraft.server.level.ServerPlayer player,

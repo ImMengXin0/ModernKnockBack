@@ -51,14 +51,17 @@ public final class ClassicCombat implements Listener {
         final Settings settings;
         final FishHook hook;
         final LivingEntity victim;
+        final UUID victimId;
         final ClassicKnockbackMath.Attack attack;
         EntityDamageByEntityEvent damage;
         EntityKnockbackEvent knockback;
         boolean damaging = true;
         boolean applied;
+        boolean accepted;
         int immunityWindow = -1;
         RodScope(Settings settings, FishHook hook, LivingEntity victim, ClassicKnockbackMath.Attack attack) {
             this.settings = settings; this.hook = hook; this.victim = victim; this.attack = attack;
+            this.victimId = victim.getUniqueId();
         }
     }
     private record Prepared(Settings settings, HitContext context, Calculation calculation) {}
@@ -198,8 +201,8 @@ public final class ClassicCombat implements Listener {
             // Install the short rod->melee guard at MONITOR as soon as the damage event is
             // accepted. The final result still replaces this provisional stamp or removes it
             // if a later handler cancels the damage/KB.
-            if (!event.isCancelled() && config == rod.settings)
-                rodHits.put(rod.victim.getUniqueId(), new RodStamp(config, rod.victim.getTicksLived(), event, null));
+            if (!event.isCancelled() && config == rod.settings && CombatTracker.owns(rod.victim))
+                rodHits.put(rod.victimId, new RodStamp(config, rod.victim.getTicksLived(), event, null));
             return; // The rod pipeline checks final damage/KB before recording its follow-up window.
         }
         if (!config.classicEnabled() || !(event.getEntity() instanceof LivingEntity victim) || !eligible(victim, config)
@@ -253,7 +256,10 @@ public final class ClassicCombat implements Listener {
         if (!scopedRod && context.type().melee() && blockedByRod(victim, config)) {
             event.setCancelled(true); preventedComponents.increment(); return null;
         }
-        if (scopedRod && rod.applied) { event.setCancelled(true); preventedComponents.increment(); return null; }
+        if (scopedRod && (rod.damaging || rod.applied || rod.accepted
+                || rod.knockback != null && rod.knockback != event)) {
+            event.setCancelled(true); preventedComponents.increment(); return null;
+        }
         Hit hit = scopedRod ? null : hits.get(id);
         if (hit != null && hit.settings == config && hit.tick == now && hit.damage != null && hit.damage.isCancelled()) return null;
         if (hit != null && (hit.settings != config || hit.tick != now || hit.damage != null && victim.getLastDamageCause() != hit.damage)) hit = null;
@@ -292,17 +298,34 @@ public final class ClassicCombat implements Listener {
         return jumps.recent(player, window, settings.get());
     }
     public void prepare(EntityKnockbackEvent event, HitContext context, Settings config, Calculation calculation) {
-        prepared.put(event, new Prepared(config, context, calculation));
         RodScope rod = rodScope.get();
-        if (rod != null && rod.victim == event.getEntity() && context.type() == HitType.FISHING_ROD) rod.knockback = event;
+        if (rod != null && rod.victim == event.getEntity() && context.type() == HitType.FISHING_ROD) {
+            if (rod.damaging || rod.accepted || rod.knockback != null && rod.knockback != event) {
+                event.setCancelled(true); preventedComponents.increment(); return;
+            }
+            // Keep direct integrations compatible; registered events are captured at LOWEST.
+            rod.knockback = event;
+        }
+        prepared.put(event, new Prepared(config, context, calculation));
     }
     @EventHandler(priority = EventPriority.MONITOR)
     public void finishedKnockback(EntityKnockbackEvent event) {
         Prepared value = prepared.remove(event);
-        if (value == null || event.isCancelled() || value.settings != settings.get()
+        if (event.isCancelled()
                 || !(event.getEntity() instanceof LivingEntity victim) || !CombatTracker.owns(victim)) return;
-        value.calculation.commit().run();
-        applied(victim, value.settings, value.context, event);
+        RodScope rod = rodScope.get();
+        boolean scopedRod = rod != null && !rod.damaging && rod.victim == victim && rod.knockback == event;
+        if (value != null) {
+            if (value.settings != settings.get() || scopedRod && rod.accepted) return;
+            value.calculation.commit().run();
+            if (scopedRod) rod.accepted = true;
+            applied(victim, value.settings, value.context, event);
+        } else if (scopedRod && !rod.accepted && rod.settings == settings.get()) {
+            // API cancellation/disabled profiles retain the native vector. Its accepted contact
+            // still needs one delivery and the full rod window, without counting a custom edit.
+            rod.accepted = true;
+            applied(victim, rod.settings, true, event);
+        }
     }
     private boolean heightLimited(LivingEntity victim, KnockbackProfile profile) {
         UUID id = victim.getUniqueId();
@@ -318,9 +341,11 @@ public final class ClassicCombat implements Listener {
         applied(victim, config, context, null);
     }
     private void applied(LivingEntity victim, Settings config, HitContext context, EntityKnockbackEvent knockback) {
+        applied(victim, config, context.type() == HitType.FISHING_ROD, knockback);
+    }
+    private void applied(LivingEntity victim, Settings config, boolean rod, EntityKnockbackEvent knockback) {
         if (!config.classic().protectVelocityFromSync() || !(victim instanceof Player)) return;
         Hit hit = hits.get(victim.getUniqueId());
-        boolean rod = context.type() == HitType.FISHING_ROD;
         RodScope scope = rodScope.get();
         EntityDamageByEntityEvent damage = rod
                 ? scope != null && scope.victim == victim ? scope.damage : null : hit == null ? null : hit.damage;
@@ -364,9 +389,8 @@ public final class ClassicCombat implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void velocity(PlayerVelocityEvent event) {
         Player victim = event.getPlayer();
-        if (!CombatTracker.owns(victim)) return;
         VelocityGuard value = velocityEvents.remove(event);
-        if (value == null) return;
+        if (value == null || !CombatTracker.owns(victim)) return;
         // A nested hit can replace the pending token during another plugin's velocity handler.
         // The earlier event must neither replay its rod vector nor consume the new melee token.
         boolean current = pending.remove(victim.getUniqueId(), value.token);
@@ -399,6 +423,7 @@ public final class ClassicCombat implements Listener {
             return RodResult.REJECTED;
         }
         if (!ClassicRodContact.claim(hook)) return RodResult.REJECTED;
+        UUID shooterId = shooter.getUniqueId();
         reconcile(victim);
         // 1.8's projectile damage(0) cannot bypass an existing ordinary damage immunity window.
         if (blocked(victim, config) || victim.getNoDamageTicks() > victim.getMaximumNoDamageTicks() / 2
@@ -419,7 +444,7 @@ public final class ClassicCombat implements Listener {
         Vector previousVelocity = victim.getVelocity().clone();
         RodScope old = rodScope.get();
         RodScope current = new RodScope(config, hook, victim, snapshot(hook, victim, false, strength / 0.4));
-        if (activeRods.putIfAbsent(victim.getUniqueId(), current) != null) {
+        if (activeRods.putIfAbsent(current.victimId, current) != null) {
             detachHook(hook);
             return RodResult.REJECTED;
         }
@@ -432,9 +457,10 @@ public final class ClassicCombat implements Listener {
                 current.damaging = false;
                 EntityDamageByEntityEvent damage = current.damage;
                 // Check the final event after every listener, including later MONITOR handlers.
-                if (damage == null || damage.isCancelled() || settings.get() != config || victim.isDead()
+                if (damage == null || damage.isCancelled() || settings.get() != config
+                        || !CombatTracker.owns(victim) || !CombatTracker.owns(shooter) || victim.isDead()
                         || victim.getLastDamageCause() != damage) return;
-                rodHits.put(victim.getUniqueId(), new RodStamp(config, now, damage, null));
+                rodHits.put(current.victimId, new RodStamp(config, now, damage, null));
                 boolean zeroDamage = damage.getDamage() == 0 && damage.getFinalDamage() == 0;
                 if (damage.getFinalDamage() > 0) recordHit(victim, new Hit(config, now, damage, current.attack));
                 if (zeroDamage) {
@@ -456,16 +482,16 @@ public final class ClassicCombat implements Listener {
             discardRod(current, previousImmunity, previousDamage);
             throw failure;
         } finally {
-            activeRods.remove(victim.getUniqueId(), current);
+            activeRods.remove(current.victimId, current);
             if (old == null) rodScope.remove(); else rodScope.set(old);
             // Spend the native contact and give the retained hook its small legacy bounce.
             detachHook(hook);
         }
-        if (current.applied && current.knockback != null && !current.knockback.isCancelled()
+        if (current.accepted && current.knockback != null && !current.knockback.isCancelled()
                 && current.damage != null && !current.damage.isCancelled() && settings.get() == config) {
-            rodHits.computeIfPresent(victim.getUniqueId(), (id, stamp) -> stamp.settings == config && stamp.damage == current.damage
+            rodHits.computeIfPresent(current.victimId, (id, stamp) -> stamp.settings == config && stamp.damage == current.damage
                     ? new RodStamp(config, now, current.damage, current.knockback) : stamp);
-            UUID victimId = victim.getUniqueId(), shooterId = shooter.getUniqueId();
+            UUID victimId = current.victimId;
             BooleanSupplier currentHit = () -> {
                 RodStamp stamp = rodHits.get(victimId);
                 return CombatTracker.owns(victim) && CombatTracker.owns(shooter)
@@ -487,8 +513,10 @@ public final class ClassicCombat implements Listener {
                         && current.damage.getDamage() == 0 && current.damage.getFinalDamage() == 0) {
                     // CraftBukkit adds 90 degrees; native yaw 0 matches the fixed 1.8 tilt.
                     victim.playHurtAnimation(-90f);
-                    var sound = victim.getHurtSound();
-                    if (sound != null) victim.getWorld().playSound(victim, sound, SoundCategory.PLAYERS, 1, 1);
+                    if (currentHit.getAsBoolean()) {
+                        var sound = victim.getHurtSound();
+                        if (sound != null) victim.getWorld().playSound(victim, sound, SoundCategory.PLAYERS, 1, 1);
+                    }
                 }
                 return RodResult.APPLIED;
             }
@@ -500,17 +528,18 @@ public final class ClassicCombat implements Listener {
         LivingEntity victim = current.victim;
         Settings config = current.settings;
         // Remove only this rod's state, never a newer hit installed by a nested listener.
-        rodHits.computeIfPresent(victim.getUniqueId(), (id, stamp) ->
+        rodHits.computeIfPresent(current.victimId, (id, stamp) ->
                 stamp.settings == config && stamp.damage == current.damage ? null : stamp);
-        if (settings.get() == config && current.damage != null && victim.getLastDamageCause() == current.damage
+        Pending value = pending.get(current.victimId);
+        if (value != null && value.settings == config && value.rod && value.damage == current.damage)
+            pending.remove(current.victimId, value);
+        if (CombatTracker.owns(victim) && settings.get() == config
+                && current.damage != null && victim.getLastDamageCause() == current.damage
                 && current.damage.getDamage() == 0 && current.damage.getFinalDamage() == 0
                 && current.immunityWindow >= 0 && victim.getNoDamageTicks() == current.immunityWindow) {
             victim.setNoDamageTicks(previousImmunity);
             victim.setLastDamage(previousDamage);
         }
-        Pending value = pending.get(victim.getUniqueId());
-        if (value != null && value.settings == config && value.rod && value.damage == current.damage)
-            pending.remove(victim.getUniqueId(), value);
     }
     private void detachHook(FishHook hook) {
         if (hook == null || !CombatTracker.owns(hook)) return;
@@ -521,11 +550,15 @@ public final class ClassicCombat implements Listener {
             hook.remove();
         }
     }
-    /** Non-player entities may emit native KB during damage(0); apply the classic vector once afterwards. */
+    /** Suppress damage(0)'s native component and capture the one explicit rod KB before API callbacks. */
     @EventHandler(priority = EventPriority.LOWEST)
     public void nativeRodDamageKnockback(EntityKnockbackEvent event) {
         RodScope rod = rodScope.get();
-        if (rod != null && rod.damaging && event.getEntity() == rod.victim) event.setCancelled(true);
+        if (rod == null || event.getEntity() != rod.victim) return;
+        if (rod.damaging || rod.accepted || rod.knockback != null && rod.knockback != event) {
+            event.setCancelled(true); preventedComponents.increment(); return;
+        }
+        rod.knockback = event;
     }
     private boolean trackJump(Player player, Settings config) {
         if (!CombatTracker.owns(player)) return false;
