@@ -1,5 +1,5 @@
 name: ModernKnockBack
-version: '2.0.5-r3'
+version: '2.0.5-r4'
 main: cn.mx.modernkb.ModernKnockbackPlugin
 api-version: '1.21.11'
 folia-supported: true

@@ -1,6 +1,6 @@
 # 温和现代 PvP 配置
 
-适用于 ModernKnockBack 2.0.5-r2 的 modern 模式 / Minecraft 1.21.11。这是一套温和的可选起点；全新安装的 modern 默认使用 responsive-pvp 预设。
+适用于 ModernKnockBack 2.0.5-r4 的 modern 模式 / Minecraft 1.21.11。这是一套温和的可选起点；全新安装的 modern 默认使用 responsive-pvp 预设。
 
 备份服务器 `plugins/ModernKnockBack/modern/` 中的 config.yml 和 profiles.yml，将本目录同名的两份文件合并放进去，然后执行 `/kbtest modern`；已在modern时执行 `/mkb reload`。看到应用成功后，用 `/mkb status` 查看状态。
 

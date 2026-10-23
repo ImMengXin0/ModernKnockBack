@@ -45,6 +45,22 @@ public class CombatTrackerTest {
     private void classic(boolean stopSprint) {
         settings = settings.withMode(CombatMode.CLASSIC, new ClassicSettings(10, 4, true, true, stopSprint, true, 2));
     }
+    @Test public void heldFishingRodLeftClickAndFlyingHookKeepSeparateHitTypes() {
+        classic(false);
+        var equipment = mock(org.bukkit.inventory.EntityEquipment.class);
+        var held = mock(org.bukkit.inventory.ItemStack.class);
+        when(attacker.getEquipment()).thenReturn(equipment);
+        when(equipment.getItemInMainHand()).thenReturn(held);
+        when(held.getType()).thenReturn(org.bukkit.Material.FISHING_ROD);
+        tracker.preAttack(new PrePlayerAttackEntityEvent(attacker, victim, true));
+        assertEquals(HitType.MELEE, tracker.context(victim, attacker, "ENTITY_ATTACK", false).type());
+
+        FishHook hook = mock(FishHook.class);
+        when(hook.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(hook.getShooter()).thenReturn(attacker);
+        bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(hook)).thenReturn(true);
+        assertEquals(HitType.FISHING_ROD, tracker.context(victim, hook, "DAMAGE", false).type());
+    }
     @Test public void classicHeldClientSprintSurvivesNativeResetAcrossMultipleHits() {
         classic(false);
         tracker.toggleSprint(new PlayerToggleSprintEvent(attacker, true));

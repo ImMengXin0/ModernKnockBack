@@ -4,7 +4,6 @@ import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.combat.*;
 import cn.mx.modernkb.compat.SyncCompatibility;
 import cn.mx.modernkb.compat.RodVelocity;
-import cn.mx.modernkb.compat.RodFeedback;
 import cn.mx.modernkb.compat.RodCollision;
 import cn.mx.modernkb.compat.ClientCollisions;
 import cn.mx.modernkb.config.*;
@@ -47,7 +46,7 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
             validateAssignments(settings);
             tracker = new CombatTracker(this, () -> settings);
             sync = new SyncCompatibility(); sync.refresh();
-            classic = new ClassicCombat(this, () -> settings, players, tracker, RodVelocity.forServer(), RodFeedback.forServer());
+            classic = new ClassicCombat(this, () -> settings, players, tracker, RodVelocity.forServer());
             pushing = new PlayerPushRules(this, () -> settings, players);
             collisions = new ClientCollisions(this, () -> settings, players);
             knockback = new KnockbackListener(() -> settings, players, tracker, sync::active, classic);
@@ -141,7 +140,6 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
                 sender.sendMessage("KnockbackSync: " + sync.status() + " | policy=" + (settings.preserveSyncY() ? "preserve-y" : "before-sync"));
                 sender.sendMessage("Classic vectors=" + classic.applied() + " | blocked early hits=" + classic.preventedHits()
                         + " | deduplicated KB components=" + classic.preventedComponents());
-                if (settings.classicEnabled()) sender.sendMessage(classic.rodStatus());
                 if (settings.classicEnabled()) sender.sendMessage("Classic: no attack charge | hit interval=" + settings.classic().hitIntervalTicks()
                         + " ticks | rod interval=" + settings.classic().effectiveRodHitTicks()
                         + " ticks | rod to sword=" + settings.classic().effectiveRodMeleeTicks() + " ticks | velocity protection=" + settings.classic().protectVelocityFromSync()

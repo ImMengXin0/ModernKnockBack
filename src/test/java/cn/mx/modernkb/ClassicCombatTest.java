@@ -4,7 +4,6 @@ import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.combat.*;
 import cn.mx.modernkb.config.*;
 import cn.mx.modernkb.compat.RodVelocity;
-import cn.mx.modernkb.compat.RodFeedback;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
 import io.papermc.paper.registry.RegistryAccess;
@@ -14,7 +13,6 @@ import java.lang.reflect.Proxy;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import org.bukkit.*;
 import org.bukkit.attribute.*;
 import org.bukkit.damage.DamageSource;
@@ -51,15 +49,14 @@ public class ClassicCombatTest {
     private DamageSource rodSource;
 
     @BeforeClass public static void bootstrapAttributes() {
-        // Lightweight registries for Bukkit constants; no live server.
+        // Lightweight registries for Bukkit's static Attribute and DamageType constants; no live server.
         try (var accessStatic = mockStatic(RegistryAccess.class)) {
             RegistryAccess access = mock(RegistryAccess.class);
             accessStatic.when(RegistryAccess::registryAccess).thenReturn(access);
             var registryEntries = new HashMap<String, Keyed>();
             org.mockito.stubbing.Answer<Object> registries = call -> {
                 Class<?> entryType = call.getArgument(0) == DamageType.class || call.getArgument(0) == RegistryKey.DAMAGE_TYPE
-                        ? DamageType.class : call.getArgument(0) == Sound.class || call.getArgument(0) == RegistryKey.SOUND_EVENT
-                        ? Sound.class : Attribute.class;
+                        ? DamageType.class : Attribute.class;
                 return new Registry<Keyed>() {
                 @Override public Keyed get(NamespacedKey key) {
                     return registryEntries.computeIfAbsent(entryType.getName() + "/" + key,
@@ -86,7 +83,6 @@ public class ClassicCombatTest {
             doAnswer(registries).when(access).getRegistry(any(RegistryKey.class));
             assertNotNull(Attribute.ATTACK_SPEED);
             assertNotNull(DamageType.THROWN);
-            assertNotNull(Sound.ENTITY_PLAYER_HURT);
         }
     }
     @Before public void setup() {
@@ -99,7 +95,6 @@ public class ClassicCombatTest {
         when(unsafe.createDamageSourceBuilder(eq(DamageType.THROWN))).thenReturn(rodSourceBuilder);
         when(rodSourceBuilder.build()).thenReturn(rodSource);
         plugin = mock(Plugin.class); when(plugin.namespace()).thenReturn("modernknockback"); when(plugin.getName()).thenReturn("ModernKnockback");
-        when(plugin.isEnabled()).thenReturn(true);
         victim = player(1); attacker = player(0);
         tracker = mock(CombatTracker.class);
         when(tracker.kind(victim)).thenReturn(CombatantKind.PLAYER); when(tracker.kind(attacker)).thenReturn(CombatantKind.PLAYER);
@@ -134,7 +129,7 @@ public class ClassicCombatTest {
         when(player.getLocation()).thenReturn(new Location(null, x, 64, 0));
         when(player.getPersistentDataContainer()).thenReturn(mock(PersistentDataContainer.class));
         when(player.getVelocity()).thenReturn(new Vector()); when(player.getTicksLived()).thenReturn(100);
-        when(player.isOnGround()).thenReturn(true); when(player.isValid()).thenReturn(true);
+        when(player.isOnGround()).thenReturn(true);
         EntityScheduler scheduler = mock(EntityScheduler.class); when(player.getScheduler()).thenReturn(scheduler);
         when(scheduler.run(any(), any(), any())).thenReturn(mock(ScheduledTask.class));
         when(scheduler.runDelayed(any(), any(), any(), anyLong())).thenReturn(mock(ScheduledTask.class));
@@ -153,87 +148,6 @@ public class ClassicCombatTest {
     private EntityKnockbackEvent knockback() {
         return new com.destroystokyo.paper.event.entity.EntityKnockbackByEntityEvent(victim, attacker,
                 EntityKnockbackEvent.Cause.ENTITY_ATTACK, 0.4f, new Vector(0.4, 0.4, 0));
-    }
-    @Test public void nativeMeleeFallbackCannotRepeatKnockbackInsideNineTickWindow() {
-        settings = settings.withMode(CombatMode.CLASSIC, new ClassicSettings(9, 9, true, true, false, true, 2, 9));
-        doAnswer(call -> {
-            if (call.getArgument(0) instanceof KnockbackProfileEvent selection) selection.setCancelled(true);
-            return null;
-        }).when(manager).callEvent(any());
-        // A native impulse may have no positive damage record (zero-damage combat plugin).
-        var first = knockback();
-        listener.knockback(first); classic.finishedKnockback(first);
-        assertFalse(first.isCancelled());
-        for (int tick = 100; tick < 109; tick++) {
-            when(victim.getTicksLived()).thenReturn(tick);
-            var repeated = knockback(); listener.knockback(repeated); classic.finishedKnockback(repeated);
-            assertTrue("Native fallback bypassed the hurt window at tick " + tick, repeated.isCancelled());
-            var leftClick = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(leftClick);
-            assertTrue(leftClick.isCancelled());
-        }
-        when(victim.getTicksLived()).thenReturn(109);
-        var boundary = knockback(); listener.knockback(boundary); classic.finishedKnockback(boundary);
-        assertFalse(boundary.isCancelled());
-    }
-    @Test public void nativeMeleeFallbackDeduplicatesTheAcceptedDamageComponent() {
-        doAnswer(call -> {
-            if (call.getArgument(0) instanceof KnockbackModifyEvent modification) modification.setCancelled(true);
-            return null;
-        }).when(manager).callEvent(any());
-        var damage = damage(); classic.acceptedDamage(damage);
-        var first = knockback(); listener.knockback(first); classic.finishedKnockback(first);
-        assertFalse(first.isCancelled());
-        var extraSprint = knockback(); listener.knockback(extraSprint); classic.finishedKnockback(extraSprint);
-        assertTrue("Declining a custom vector must not re-enable the second native component", extraSprint.isCancelled());
-    }
-    @Test public void customNativeZeroHitCannotRepeatOnTheNextTick() {
-        var first = knockback(); listener.knockback(first); classic.finishedKnockback(first);
-        when(victim.getTicksLived()).thenReturn(101);
-        var nextTick = knockback(); listener.knockback(nextTick); classic.finishedKnockback(nextTick);
-        assertTrue(nextTick.isCancelled());
-        assertEquals(1, classic.applied());
-    }
-    @Test public void lateCancelledNativeFallbackDoesNotLeaveASyntheticWindow() {
-        doAnswer(call -> {
-            if (call.getArgument(0) instanceof KnockbackProfileEvent selection) selection.setCancelled(true);
-            return null;
-        }).when(manager).callEvent(any());
-        var first = knockback(); listener.knockback(first); classic.finishedKnockback(first);
-        first.setCancelled(true); // A later MONITOR listener rejected the actual impulse.
-        var leftClick = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(leftClick);
-        assertFalse(leftClick.isCancelled());
-        var replacement = knockback(); listener.knockback(replacement); classic.finishedKnockback(replacement);
-        assertFalse(replacement.isCancelled());
-    }
-    @Test public void rodFeedbackAndBothAttackPathsShareConfiguredNineTickWindow() {
-        settings = settings.withMode(CombatMode.CLASSIC, new ClassicSettings(9, 9, true, true, false, true, 2, 9));
-        RodVelocity.Transport transport = mock(RodVelocity.Transport.class);
-        RodFeedback feedback = mock(RodFeedback.class);
-        when(feedback.play(any(), any(), any())).thenReturn(true);
-        classic = new ClassicCombat(plugin, () -> settings, store, tracker, RodVelocity.immediate(transport), feedback);
-        listener = new KnockbackListener(() -> settings, store, tracker, () -> false, classic);
-        FishHook first = rodHook(); rodDamage(first, event -> {});
-        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(first, attacker, victim, 0.4));
-        verify(victim).setNoDamageTicks(18);
-        var order = inOrder(transport, feedback);
-        order.verify(transport).send(eq(victim), any());
-        order.verify(feedback).play(eq(victim), eq(rodSource), any());
-        for (int tick = 100; tick < 109; tick++) {
-            when(victim.getTicksLived()).thenReturn(tick);
-            assertEquals(ClassicCombat.RodResult.REJECTED, classic.rodImpactResult(rodHook(), attacker, victim, 0.4));
-            var apiRod = new EntityKnockbackEvent(victim, EntityKnockbackEvent.Cause.UNKNOWN, new Vector(0.5, 0.34, 0));
-            listener.knockback(apiRod); classic.finishedKnockback(apiRod);
-            assertTrue("Explicit rod API must share the accepted hook's window", apiRod.isCancelled());
-            var leftClick = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(leftClick);
-            assertTrue(leftClick.isCancelled());
-        }
-        verify(feedback, times(1)).play(any(), any(), any()); verify(transport, times(1)).send(any(), any());
-        when(victim.getTicksLived()).thenReturn(109);
-        FishHook boundary = rodHook(); rodDamage(boundary, event -> {});
-        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(boundary, attacker, victim, 0.4));
-        verify(feedback, times(2)).play(any(), any(), any());
-        verify(victim, never()).setHealth(anyDouble());
-        assertEquals("Classic rod: contacts=11 | accepted=2 | rejected=9 | feedback=2", classic.rodStatus());
     }
     @Test public void coincidentCriticalHitNeverUsesRandomNativeKnockbackDirection() {
         when(attacker.getLocation()).thenReturn(new Location(null, 0, 64, 0, 0, 80));
@@ -394,16 +308,15 @@ public class ClassicCombatTest {
         var stronger = damage(); when(stronger.getFinalDamage()).thenReturn(10d);
         classic.guardDamage(stronger); verify(stronger).setCancelled(true);
     }
-    private FishHook rodHook() { return rodHook(attacker); }
-    private FishHook rodHook(Player shooter) {
+    private FishHook rodHook() {
         FishHook hook = mock(FishHook.class); when(hook.getVelocity()).thenReturn(new Vector(1, 0, 0));
         HookTestState.install(hook);
-        when(hook.getShooter()).thenReturn(shooter); when(hook.isValid()).thenReturn(true);
+        when(hook.getShooter()).thenReturn(attacker); when(hook.isValid()).thenReturn(true);
         bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(hook)).thenReturn(true);
-        when(rodSource.getDirectEntity()).thenReturn(hook); when(rodSource.getCausingEntity()).thenReturn(shooter);
+        when(rodSource.getDirectEntity()).thenReturn(hook); when(rodSource.getCausingEntity()).thenReturn(attacker);
         when(tracker.context(eq(victim), any(), anyString(), anyBoolean()))
                 .thenReturn(KnockbackMathTest.hit(HitType.FISHING_ROD, true, false, false, 1, false));
-        doAnswer(call -> { ((Runnable)call.getArgument(4)).run(); return null; }).when(tracker).withSource(eq(shooter), eq(victim), eq(hook), eq(HitType.FISHING_ROD), any());
+        doAnswer(call -> { ((Runnable)call.getArgument(4)).run(); return null; }).when(tracker).withSource(eq(attacker), eq(victim), eq(hook), eq(HitType.FISHING_ROD), any());
         doAnswer(call -> {
             var event = new EntityKnockbackEvent(victim, EntityKnockbackEvent.Cause.UNKNOWN, new Vector(0.4, 0.4, 0));
             classic.nativeRodDamageKnockback(event);
@@ -423,118 +336,6 @@ public class ClassicCombatTest {
             if (!event.isCancelled()) when(victim.getLastDamageCause()).thenReturn(event);
             return null;
         }).when(victim).damage(eq(0d), any(DamageSource.class));
-    }
-    @Test public void cancelledRodProfileStillCompletesOneNativeHitAndProtectsTheWindow() { nativeRodFallback("selection", false); }
-    @Test public void cancelledRodModificationStillCompletesOneNativeHitAndProtectsTheWindow() { nativeRodFallback("modification", false); }
-    @Test public void missingRodProfileStillCompletesOneNativeHitAndProtectsTheWindow() { nativeRodFallback("missing", false); }
-    @Test public void disabledSelectedRodProfileStillCompletesOneNativeHitAndProtectsTheWindow() { nativeRodFallback("disabled", false); }
-    @Test public void nestedKnockbackDuringRodProfileFallbackCannotApplyTwoNativeImpulses() { nativeRodFallback("nested", false); }
-    @Test public void cancelledNativeFallbackNeverSendsFeedbackOrCreatesAWindow() { nativeRodFallback("selection", true); }
-    private void nativeRodFallback(String policy, boolean cancelNative) {
-        var profiles = new HashMap<>(settings.profiles());
-        profiles.put("disabled", KnockbackMathTest.profile("enabled", false));
-        settings = new Settings(true, false, true, true, Set.of(), profiles, Map.of(), Map.of())
-                .withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
-        RodVelocity.Transport transport = mock(RodVelocity.Transport.class);
-        classic = new ClassicCombat(plugin, () -> settings, store, tracker, RodVelocity.immediate(transport));
-        listener = new KnockbackListener(() -> settings, store, tracker, () -> true, classic);
-        World world = mock(World.class);
-        when(victim.getWorld()).thenReturn(world); when(victim.getHurtSound()).thenReturn(Sound.ENTITY_PLAYER_HURT);
-        FishHook hook = rodHook(); rodDamage(hook, event -> {});
-        Vector before = new Vector(0.12, -0.08, 0.05), nativeImpulse = new Vector(0.4, 0.4, 0);
-        AtomicReference<Vector> motion = new AtomicReference<>(before.clone());
-        AtomicInteger nativeApplications = new AtomicInteger();
-        when(victim.getVelocity()).thenAnswer(call -> motion.get().clone());
-        doAnswer(call -> {
-            var event = new EntityKnockbackEvent(victim, EntityKnockbackEvent.Cause.UNKNOWN, nativeImpulse.clone());
-            classic.nativeRodDamageKnockback(event);
-            if (!event.isCancelled()) listener.knockback(event);
-            if (cancelNative) event.setCancelled(true);
-            classic.finishedKnockback(event);
-            // Real native knockback applies the final event even when MKB declines to modify it.
-            if (!event.isCancelled()) {
-                motion.set(motion.get().clone().add(event.getKnockback()));
-                nativeApplications.incrementAndGet();
-            }
-            return null;
-        }).when(victim).knockback(anyDouble(), anyDouble(), anyDouble());
-        doAnswer(call -> {
-            Object event = call.getArgument(0);
-            if (event instanceof KnockbackProfileEvent profile) {
-                if (policy.equals("selection") || policy.equals("nested")) profile.setCancelled(true);
-                if (policy.equals("nested")) victim.knockback(0.4, -1, 0);
-                if (policy.equals("missing") || policy.equals("disabled")) profile.setProfile(policy);
-            }
-            if (event instanceof KnockbackModifyEvent modify && policy.equals("modification")) modify.setCancelled(true);
-            if (event instanceof PlayerVelocityEvent velocity) {
-                classic.beginVelocity(velocity); classic.velocity(velocity);
-            }
-            return null;
-        }).when(manager).callEvent(any());
-        ClassicCombat.RodResult result = classic.rodImpactResult(hook, attacker, victim, 0.4);
-        assertEquals(cancelNative ? before : before.clone().add(nativeImpulse), motion.get());
-        assertEquals(cancelNative ? 0 : 1, nativeApplications.get());
-        assertEquals(cancelNative ? ClassicCombat.RodResult.REJECTED : ClassicCombat.RodResult.APPLIED, result);
-        assertEquals("Native fallback must not count as a custom vector modification", 0, classic.applied());
-        var sword = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(sword);
-        assertEquals(!cancelNative, sword.isCancelled());
-        if (cancelNative) {
-            verify(transport, never()).send(any(), any());
-            verify(victim, never()).playHurtAnimation(anyFloat()); verifyNoInteractions(world);
-            return;
-        }
-        var order = inOrder(transport, victim, world);
-        order.verify(transport).send(victim, before.clone().add(nativeImpulse));
-        order.verify(victim).playHurtAnimation(-90f);
-        order.verify(world).playSound(victim, Sound.ENTITY_PLAYER_HURT, SoundCategory.PLAYERS, 1, 1);
-        when(victim.getNoDamageTicks()).thenReturn(0); // Even an external immunity reset cannot bypass the shared stamp.
-        Player other = player(-1);
-        for (int tick = 100; tick < 110; tick++) {
-            when(victim.getTicksLived()).thenReturn(tick);
-            Player shooter = tick % 2 == 0 ? attacker : other;
-            assertEquals(ClassicCombat.RodResult.REJECTED, classic.rodImpactResult(rodHook(shooter), shooter, victim, 0.4));
-        }
-        verify(victim, times(1)).damage(0, rodSource);
-        verify(victim, times(policy.equals("nested") ? 2 : 1)).knockback(anyDouble(), anyDouble(), anyDouble());
-        verify(transport, times(1)).send(any(), any());
-        verify(victim, times(1)).playHurtAnimation(-90f);
-        verify(world, times(1)).playSound(victim, Sound.ENTITY_PLAYER_HURT, SoundCategory.PLAYERS, 1, 1);
-        verify(victim, never()).setHealth(anyDouble());
-        when(victim.getTicksLived()).thenReturn(110);
-        var allowed = new PrePlayerAttackEntityEvent(other, victim, true); classic.beforeAttack(allowed);
-        assertFalse(allowed.isCancelled());
-    }
-    @Test public void twoAnglersShareOneHurtSoundAnimationAndVelocityUntilTheTenTickBoundary() {
-        RodVelocity.Transport transport = mock(RodVelocity.Transport.class);
-        classic = new ClassicCombat(plugin, () -> settings, store, tracker, RodVelocity.immediate(transport));
-        listener = new KnockbackListener(() -> settings, store, tracker, () -> true, classic);
-        World world = mock(World.class);
-        when(victim.getWorld()).thenReturn(world); when(victim.getHurtSound()).thenReturn(Sound.ENTITY_PLAYER_HURT);
-        Player other = player(-1);
-        AtomicInteger remaining = new AtomicInteger();
-        when(victim.getNoDamageTicks()).thenAnswer(call -> remaining.get());
-        doAnswer(call -> { remaining.set(call.getArgument(0)); return null; }).when(victim).setNoDamageTicks(anyInt());
-        FishHook first = rodHook(); rodDamage(first, event -> {});
-        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(first, attacker, victim, 0.4));
-        assertEquals(20, remaining.get());
-        for (int tick = 101; tick < 110; tick++) {
-            when(victim.getTicksLived()).thenReturn(tick); remaining.decrementAndGet();
-            Player shooter = tick % 2 == 0 ? attacker : other;
-            FishHook next = rodHook(shooter);
-            assertEquals(ClassicCombat.RodResult.REJECTED, classic.rodImpactResult(next, shooter, victim, 0.4));
-            assertEquals("Rejected rods must not refresh immunity", 120 - tick, remaining.get());
-        }
-        verify(victim, times(1)).damage(0, rodSource);
-        verify(victim, times(1)).playHurtAnimation(-90f); verify(transport, times(1)).send(any(), any());
-        verify(world, times(1)).playSound(victim, Sound.ENTITY_PLAYER_HURT, SoundCategory.PLAYERS, 1, 1);
-        when(victim.getTicksLived()).thenReturn(110); remaining.decrementAndGet();
-        FishHook boundary = rodHook(other); rodDamage(boundary, event -> {});
-        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(boundary, other, victim, 0.4));
-        assertEquals(20, remaining.get());
-        verify(victim, times(2)).damage(0, rodSource); verify(victim, times(2)).knockback(anyDouble(), anyDouble(), anyDouble());
-        verify(victim, times(2)).playHurtAnimation(-90f); verify(transport, times(2)).send(any(), any());
-        verify(world, times(2)).playSound(victim, Sound.ENTITY_PLAYER_HURT, SoundCategory.PLAYERS, 1, 1);
-        verify(victim, never()).setNoDamageTicks(0); verify(victim, never()).setHealth(anyDouble());
     }
     @Test public void successfulRodBlocksSwordThroughoutRodWindowAndAllowsTenTickBoundary() {
         FishHook hook = rodHook(); rodDamage(hook, event -> {});
@@ -679,9 +480,7 @@ public class ClassicCombatTest {
         order.verify(victim).knockback(anyDouble(), anyDouble(), anyDouble());
         order.verify(hook).setHookedEntity(null); order.verify(hook).setVelocity(new Vector(-0.1, -0.05, 0));
         order.verify(victim).setVelocity(any());
-        order.verify(victim).playHurtAnimation(-90f);
-        verify(victim, never()).hideEntity(any(), any()); verify(attacker, never()).hideEntity(any(), any());
-        verify(hook, never()).setHookedEntity(victim);
+        order.verify(victim).playHurtAnimation(anyFloat());
         verify(victim).setNoDamageTicks(20); verify(victim).setLastDamage(0);
         verify(victim, never()).setNoDamageTicks(0); verify(victim, never()).setHealth(anyDouble());
         var nextMelee = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(nextMelee);
@@ -818,8 +617,6 @@ public class ClassicCombatTest {
         assertEquals(ClassicCombat.RodResult.REJECTED, classic.rodImpactResult(hook, attacker, victim, 0.4));
         verify(victim, times(1)).damage(0, rodSource);
         verify(victim, times(1)).knockback(anyDouble(), anyDouble(), anyDouble());
-        verify(hook, never()).setHookedEntity(victim);
-        verify(victim, never()).hideEntity(any(), any());
         verify(hook, times(1)).setVelocity(new Vector(-0.1, -0.05, 0));
         verify(hook, never()).remove();
     }
@@ -856,7 +653,7 @@ public class ClassicCombatTest {
         assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, mob, 0.4));
         assertEquals(20, remaining.get()); verify(mob, never()).setNoDamageTicks(0);
     }
-    @Test public void immediateRodSendsAfterReboundBeforeHurtAndProtectsVelocityOnce() {
+    @Test public void immediateRodSendsAfterDetachingBeforeHurtAndProtectsVelocityOnce() {
         RodVelocity.Transport transport = mock(RodVelocity.Transport.class);
         classic = new ClassicCombat(plugin, () -> settings, store, tracker, RodVelocity.immediate(transport));
         listener = new KnockbackListener(() -> settings, store, tracker, () -> true, classic);
@@ -879,9 +676,7 @@ public class ClassicCombatTest {
         var order = inOrder(hook, transport, victim);
         order.verify(hook).setVelocity(new Vector(-0.1, -0.05, 0));
         order.verify(transport).send(victim, actual);
-        order.verify(victim).playHurtAnimation(-90f);
-        verify(victim, never()).hideEntity(any(), any());
-        verify(hook, never()).setHookedEntity(victim);
+        order.verify(victim).playHurtAnimation(anyFloat());
         verify(manager, times(1)).callEvent(isA(PlayerVelocityEvent.class));
         var later = new PlayerVelocityEvent(victim, new Vector(0, 1, 0));
         classic.beginVelocity(later); classic.velocity(later);
@@ -904,59 +699,9 @@ public class ClassicCombatTest {
         assertEquals(ClassicCombat.RodResult.REJECTED, classic.rodImpactResult(hook, attacker, victim, 0.4));
         verify(transport).discard(victim, before); verify(transport, never()).send(any(), any());
         verify(victim, never()).playHurtAnimation(anyFloat());
-        verify(victim, never()).hideEntity(any(), any());
-        verify(hook, never()).setHookedEntity(victim);
         assertEquals(0, remaining.get());
         var sword = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(sword);
         assertFalse(sword.isCancelled());
-    }
-    @Test public void regionChangeDuringRodVelocityEventDoesNotReadForeignVictimDuringCleanup() {
-        RodVelocity.Transport transport = mock(RodVelocity.Transport.class);
-        classic = new ClassicCombat(plugin, () -> settings, store, tracker, RodVelocity.immediate(transport));
-        listener = new KnockbackListener(() -> settings, store, tracker, () -> true, classic);
-        FishHook hook = rodHook(); rodDamage(hook, event -> {});
-        doAnswer(call -> {
-            bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(false);
-            clearInvocations(victim);
-            return null;
-        }).when(manager).callEvent(isA(PlayerVelocityEvent.class));
-        assertEquals(ClassicCombat.RodResult.REJECTED, classic.rodImpactResult(hook, attacker, victim, 0.4));
-        verifyNoInteractions(victim, transport);
-    }
-    @Test public void regionChangeDuringRodHurtAnimationDoesNotReadForeignSoundOrWorld() {
-        FishHook hook = rodHook(); rodDamage(hook, event -> {});
-        doAnswer(call -> {
-            bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(false);
-            clearInvocations(victim);
-            return null;
-        }).when(victim).playHurtAnimation(anyFloat());
-        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, victim, 0.4));
-        verifyNoInteractions(victim);
-    }
-    @Test public void modeChangeAfterAcceptedVelocityDoesNotPlayOldClassicAnimation() {
-        classic = new ClassicCombat(plugin, () -> settings, store, tracker, (player, previous, current) -> {
-            settings = settings.withMode(CombatMode.MODERN, ClassicSettings.defaults());
-            return true;
-        });
-        listener = new KnockbackListener(() -> settings, store, tracker, () -> true, classic);
-        FishHook hook = rodHook(); rodDamage(hook, event -> {});
-        // Delivery succeeded, but its callback changed the mode before the later feedback.
-        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, victim, 0.4));
-        verify(victim, never()).hideEntity(any(), any());
-        verify(hook, never()).setHookedEntity(victim);
-        verify(victim, never()).playHurtAnimation(anyFloat());
-    }
-    @Test public void regionChangeAfterAcceptedVelocityDoesNotReadForeignVictimOrAttach() {
-        classic = new ClassicCombat(plugin, () -> settings, store, tracker, (player, previous, current) -> {
-            bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(false);
-            clearInvocations(victim);
-            return true;
-        });
-        listener = new KnockbackListener(() -> settings, store, tracker, () -> true, classic);
-        FishHook hook = rodHook(); rodDamage(hook, event -> {});
-        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, victim, 0.4));
-        verifyNoInteractions(victim);
-        verify(hook, never()).setHookedEntity(victim);
     }
     @Test public void lateCancelledRodDamageProducesNoAnimationKnockbackOrImmunity() {
         FishHook hook = rodHook(); rodDamage(hook, event -> event.setCancelled(true));
@@ -964,8 +709,6 @@ public class ClassicCombatTest {
         verify(victim).damage(0, rodSource);
         verify(victim, never()).knockback(anyDouble(), anyDouble(), anyDouble());
         verify(victim, never()).playHurtAnimation(anyFloat()); verify(hook).setHookedEntity(null); verify(hook, never()).remove();
-        verify(victim, never()).hideEntity(any(), any());
-        verify(hook, never()).setHookedEntity(victim);
         verify(victim, never()).setNoDamageTicks(anyInt());
         assertEquals(0, classic.applied());
         var sword = new PrePlayerAttackEntityEvent(attacker, victim, true); classic.beforeAttack(sword);

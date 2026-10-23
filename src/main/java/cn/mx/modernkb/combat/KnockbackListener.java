@@ -40,7 +40,6 @@ public final class KnockbackListener implements Listener {
         HitContext context = tracker.context(victim,
                 event instanceof EntityPushedByEntityAttackEvent attack ? attack.getPushedBy() : null,
                 event.getCause().name(), config.mode() == CombatMode.MODERN && config.preserveSyncY() && sync.getAsBoolean());
-        if (classic != null && classic.guardKnockback(event, context, config)) return;
         Vector original = event.getKnockback();
         if (!KnockbackMath.finite(original)) return;
         KnockbackProfileEvent selection = new KnockbackProfileEvent(context, config.select(context, preference.profile()), config.mode());

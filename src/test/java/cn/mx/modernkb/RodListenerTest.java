@@ -5,11 +5,9 @@ import cn.mx.modernkb.combat.CombatTracker;
 import cn.mx.modernkb.combat.ClassicCombat;
 import cn.mx.modernkb.config.*;
 import cn.mx.modernkb.compat.RodCollision;
-import cn.mx.modernkb.rod.ClassicRodContact;
 import cn.mx.modernkb.rod.RodListener;
 import io.papermc.paper.threadedregions.scheduler.*;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -17,8 +15,6 @@ import org.bukkit.World;
 import org.bukkit.entity.*;
 import org.bukkit.event.entity.ProjectileHitEvent;
 import org.bukkit.event.player.PlayerFishEvent;
-import org.bukkit.event.player.PlayerQuitEvent;
-import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.util.Vector;
 import org.junit.*;
@@ -47,13 +43,7 @@ public class RodListenerTest {
         when(player.getUniqueId()).thenReturn(UUID.randomUUID()); when(victim.getUniqueId()).thenReturn(UUID.randomUUID());
         when(player.getTicksLived()).thenReturn(100); when(hook.getShooter()).thenReturn(player);
         when(hook.getVelocity()).thenReturn(new Vector(1, 0.5, -1)); when(hook.isValid()).thenReturn(true);
-        when(victim.isValid()).thenReturn(true);
-        World world = mock(World.class);
-        when(hook.getLocation()).thenReturn(new Location(world, 0, 64, 0));
-        when(hook.getWorld()).thenReturn(world); when(victim.getWorld()).thenReturn(world);
-        var attached = new AtomicReference<Entity>();
-        when(hook.getHookedEntity()).thenAnswer(call -> attached.get());
-        doAnswer(call -> { attached.set(call.getArgument(0)); return null; }).when(hook).setHookedEntity(any());
+        when(hook.getLocation()).thenReturn(new Location(mock(World.class), 0, 64, 0));
         scheduler = mock(EntityScheduler.class); when(hook.getScheduler()).thenReturn(scheduler);
         tracker = mock(CombatTracker.class); when(tracker.kind(victim)).thenReturn(CombatantKind.PLAYER);
         store = new PlayerStore(temporary.getRoot().toPath().resolve("players.yml"));
@@ -131,25 +121,19 @@ public class RodListenerTest {
         bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(false);
         listener.impact(new ProjectileHitEvent(hook, victim)); verifyNoInteractions(tracker);
     }
-    @Test public void classicCollisionUsesDamagePipelineAndRetainsSlightlyReboundingHook() {
+    @Test public void classicCollisionUsesDamagePipelineAndOwnsNativeAttachment() {
         settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
         ClassicCombat classic = mock(ClassicCombat.class);
         listener = new RodListener(plugin, () -> settings, store, tracker, classic);
-        when(classic.rodImpactResult(hook, player, victim, 0.2)).thenAnswer(call -> {
-            assertTrue(ClassicRodContact.claim(hook));
-            return ClassicCombat.RodResult.APPLIED;
-        });
+        when(classic.rodImpactResult(hook, player, victim, 0.2)).thenReturn(ClassicCombat.RodResult.APPLIED);
         when(victim.getVelocity()).thenReturn(new Vector(), new Vector(0.2, 0.18, 0));
         var event = new ProjectileHitEvent(hook, victim); listener.impact(event);
         assertTrue(event.isCancelled());
         verify(classic).rodImpactResult(hook, player, victim, 0.2);
         verify(victim, never()).knockback(anyDouble(), anyDouble(), anyDouble());
         verify(victim, never()).setVelocity(any());
-        verify(victim, never()).hideEntity(any(), any()); verify(player, never()).hideEntity(any(), any());
-        verify(hook).setHookedEntity(null); verify(hook, never()).setHookedEntity(victim);
-        verify(hook, never()).remove();
+        verify(hook).setHookedEntity(null); verify(hook, never()).remove();
         verify(hook).setVelocity(new Vector(-0.1, -0.05, 0.1));
-        assertNull(hook.getHookedEntity());
     }
     @Test public void classicDoesNotRequeueVelocityAfterCombatHasAlreadyDeliveredIt() {
         settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
@@ -160,7 +144,7 @@ public class RodListenerTest {
         listener.impact(new ProjectileHitEvent(hook, victim));
         verify(victim, never()).setVelocity(any());
     }
-    @Test public void retainedRejectedHookDoesNotRepeatDamageOrBounceOnLaterNativeContacts() {
+    @Test public void retainedHookDoesNotRepeatDamageOrBounceOnLaterNativeContacts() {
         settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
         ClassicCombat classic = mock(ClassicCombat.class);
         listener = new RodListener(plugin, () -> settings, store, tracker, classic);
@@ -173,65 +157,6 @@ public class RodListenerTest {
         verify(classic, times(1)).rodImpactResult(hook, player, victim, 0.2);
         verify(hook, times(1)).setVelocity(new Vector(-0.1, -0.05, 0.1));
         verify(hook, never()).remove();
-    }
-    @Test public void acceptedHookStaysDetachedAcrossRepeatContactsAndListenerReconstruction() {
-        settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
-        ClassicCombat classic = mock(ClassicCombat.class);
-        when(classic.rodImpactResult(hook, player, victim, 0.2)).thenAnswer(call -> {
-            assertTrue(ClassicRodContact.claim(hook));
-            return ClassicCombat.RodResult.APPLIED;
-        });
-        listener = new RodListener(plugin, () -> settings, store, tracker, classic);
-        listener.impact(new ProjectileHitEvent(hook, victim));
-        listener.impact(new ProjectileHitEvent(hook, player));
-        listener = new RodListener(plugin, () -> settings, store, tracker, classic);
-        listener.impact(new ProjectileHitEvent(hook, victim));
-        verify(classic, times(1)).rodImpactResult(hook, player, victim, 0.2);
-        verify(victim, never()).hideEntity(any(), any());
-        verify(hook, never()).setHookedEntity(victim);
-        verify(hook, times(1)).setVelocity(new Vector(-0.1, -0.05, 0.1));
-        assertNull(hook.getHookedEntity());
-    }
-    @Test public void repeatedCleanupNeverReversesOrAcceleratesTheSpentHook() {
-        assertTrue(ClassicRodContact.claim(hook));
-        ClassicRodContact.finish(hook);
-        when(hook.getVelocity()).thenReturn(new Vector(-0.1, -0.05, 0.1));
-        clearInvocations(hook, victim);
-        ClassicRodContact.finish(hook);
-        verify(victim, never()).hideEntity(any(), any());
-        verify(hook).setHookedEntity(null);
-        verify(hook, never()).setHookedEntity(victim);
-        verify(hook, never()).setVelocity(any());
-        assertNull(hook.getHookedEntity());
-        assertFalse(ClassicRodContact.claim(hook));
-    }
-    @Test public void foreignOrInvalidHookCannotBeReadOrRebounded() {
-        assertTrue(ClassicRodContact.claim(hook));
-        bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(hook)).thenReturn(false);
-        clearInvocations(hook, victim);
-        ClassicRodContact.finish(hook);
-        verifyNoInteractions(hook, victim);
-        bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(hook)).thenReturn(true);
-        when(hook.isValid()).thenReturn(false);
-        ClassicRodContact.finish(hook);
-        verify(hook, never()).setHookedEntity(any());
-        verify(hook, never()).setVelocity(any());
-    }
-    @Test public void nonfiniteIncomingHookMotionFallsWithoutInvalidPacketVectors() {
-        assertTrue(ClassicRodContact.claim(hook));
-        when(hook.getVelocity()).thenReturn(new Vector(Double.NaN, 0, Double.POSITIVE_INFINITY));
-        ClassicRodContact.finish(hook);
-        verify(hook).setVelocity(new Vector(0, -0.05, 0));
-        verify(hook, never()).setHookedEntity(victim);
-        assertFalse(ClassicRodContact.claim(hook));
-    }
-    @Test public void incomingUpwardMotionCannotBounceTheHookBackIntoTheVictimFace() {
-        assertTrue(ClassicRodContact.claim(hook));
-        when(hook.getVelocity()).thenReturn(new Vector(2, 2, -2));
-        ClassicRodContact.finish(hook);
-        verify(hook).setVelocity(new Vector(-0.2, -0.2, 0.2));
-        assertNull(hook.getHookedEntity());
-        verify(victim, never()).hideEntity(any(), any()); verify(player, never()).hideEntity(any(), any());
     }
     @Test public void impactDoesNotConsumeRecastDelayBeforeThePlayerActuallyReels() {
         settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
@@ -253,8 +178,6 @@ public class RodListenerTest {
         when(victim.getVelocity()).thenReturn(new Vector(), new Vector(0.5, 0.34, 0));
         when(classic.rodImpactResult(hook, player, victim, 0.2)).thenReturn(ClassicCombat.RodResult.REJECTED);
         listener.impact(new ProjectileHitEvent(hook, victim)); verify(victim, never()).setVelocity(any());
-        verify(victim, never()).hideEntity(any(), any()); verify(hook, never()).setHookedEntity(victim);
-        verify(hook).setVelocity(new Vector(-0.1, -0.05, 0.1));
     }
     @Test public void alreadyCancelledProjectileNeverStartsClassicDamage() {
         settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
@@ -262,7 +185,6 @@ public class RodListenerTest {
         listener = new RodListener(plugin, () -> settings, store, tracker, classic);
         var event = new ProjectileHitEvent(hook, victim); event.setCancelled(true); listener.impact(event);
         verifyNoInteractions(classic); verifyNoInteractions(tracker);
-        verify(victim, never()).hideEntity(any(), any()); verify(hook, never()).setHookedEntity(victim);
     }
     @Test public void classicReelCancelsNativePullDetachesHookAndConsumesRecastDelay() {
         settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
@@ -297,75 +219,6 @@ public class RodListenerTest {
         bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(hook)).thenReturn(false); clearInvocations(hook);
         var foreign = new PlayerFishEvent(player, victim, hook, PlayerFishEvent.State.CAUGHT_ENTITY);
         listener.preventClassicPull(foreign); assertFalse(foreign.isCancelled()); verifyNoInteractions(hook);
-    }
-    @Test public void spentClassicHookCannotPullDuringModeOrExclusionCleanup() {
-        assertTrue(ClassicRodContact.claim(hook));
-        ClassicRodContact.finish(hook);
-        clearInvocations(hook);
-        settings = settings.withMode(CombatMode.MODERN, ClassicSettings.defaults());
-        store.excluded(player.getUniqueId(), true);
-        var reel = new PlayerFishEvent(player, victim, hook, PlayerFishEvent.State.CAUGHT_ENTITY);
-        listener.preventClassicPull(reel);
-        assertTrue(reel.isCancelled());
-        verify(hook).setHookedEntity(null); verify(hook).remove();
-        verify(hook, never()).pullHookedEntity();
-        verify(victim, never()).hideEntity(any(), any());
-    }
-    @Test public void resetRemovesOwnedSpentHooksWithoutChangingViewerVisibility() {
-        listener.accepted(cast());
-        assertTrue(ClassicRodContact.claim(hook));
-        ClassicRodContact.finish(hook);
-        clearInvocations(hook, victim, scheduler);
-        listener.reset();
-        verify(hook).setHookedEntity(null); verify(hook).remove();
-        verify(victim, never()).showEntity(any(), any());
-        verifyNoInteractions(scheduler);
-    }
-    @Test public void resetDefersForeignHookRemovalToItsOwningRegion() {
-        listener.accepted(cast());
-        bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(hook)).thenReturn(false);
-        clearInvocations(hook, scheduler);
-        listener.reset();
-        verify(hook, never()).isValid(); verify(hook, never()).remove();
-        var deferred = org.mockito.ArgumentCaptor.forClass(Consumer.class);
-        verify(scheduler).run(eq(plugin), deferred.capture(), isNull());
-        bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(hook)).thenReturn(true);
-        deferred.getValue().accept(mock(ScheduledTask.class));
-        verify(hook).setHookedEntity(null); verify(hook).remove();
-    }
-    @Test public void normalDisableRemovesOwnedHooksWithoutSchedulingDisabledPluginTasks() {
-        listener.accepted(cast());
-        assertTrue(ClassicRodContact.claim(hook));
-        ClassicRodContact.finish(hook);
-        when(plugin.isEnabled()).thenReturn(false);
-        clearInvocations(hook, victim, scheduler);
-        listener.close();
-        verify(hook).setHookedEntity(null); verify(hook).remove();
-        verify(victim, never()).showEntity(any(), any()); verifyNoInteractions(scheduler);
-    }
-    @Test public void disableNeverReadsOrMutatesAForeignHook() {
-        listener.accepted(cast());
-        bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(hook)).thenReturn(false);
-        when(plugin.isEnabled()).thenReturn(false);
-        clearInvocations(hook, scheduler);
-        listener.close();
-        verifyNoInteractions(hook, scheduler);
-    }
-    @Test public void anglerQuitRetiresItsSpentHook() {
-        listener.accepted(cast());
-        assertTrue(ClassicRodContact.claim(hook));
-        ClassicRodContact.finish(hook);
-        clearInvocations(hook, victim);
-        var quit = mock(PlayerQuitEvent.class); when(quit.getPlayer()).thenReturn(player);
-        listener.quit(quit);
-        verify(hook).setHookedEntity(null); verify(hook).remove();
-        verify(victim, never()).showEntity(any(), any());
-    }
-    @Test public void anglerRespawnRetiresItsOldHook() {
-        listener.accepted(cast());
-        var respawn = mock(PlayerRespawnEvent.class); when(respawn.getPlayer()).thenReturn(player);
-        listener.respawn(respawn);
-        verify(hook).setHookedEntity(null); verify(hook).remove();
     }
     private Consumer<ScheduledTask> firstTick() {
         var callback = org.mockito.ArgumentCaptor.forClass(Consumer.class);
