@@ -9,6 +9,7 @@ public final class ClassicKnockbackMath {
     // LivingEntity.knockback randomizes direction below this horizontal squared distance.
     // Classic uses the attacker's captured yaw instead, including when attacker/victim Y differs.
     private static final double MELEE_DIRECTION_EPSILON_SQUARED = 1.0e-5;
+    private static final double JUMP_RESET_MIN_FORWARD_FRACTION = 0.25;
     private ClassicKnockbackMath() {}
     public record Attack(Vector direction, Vector facing, boolean sprint, int enchantment, int punch, double strength) {}
     public static Vector impulse(Vector before, HitContext hit, KnockbackProfile profile, Attack attack,
@@ -16,11 +17,16 @@ public final class ClassicKnockbackMath {
         return impulse(before, hit, profile, attack, resistance, heightLimited, false);
     }
     /**
-     * The classic jump-reset policy retains half the existing motion for a confirmed jump.
+     * A confirmed jump retains half the existing motion, with opposing motion capped so
+     * at least a quarter of the resistance-adjusted horizontal push survives along the hit.
      * It is a state flag, not another KB multiplier or a full legacy physics simulation.
      */
     public static Vector impulse(Vector before, HitContext hit, KnockbackProfile profile, Attack attack,
                                  double resistance, boolean heightLimited, boolean jumpReset) {
+        return impulse(before, hit, profile, attack, resistance, heightLimited, jumpReset, 0);
+    }
+    public static Vector impulse(Vector before, HitContext hit, KnockbackProfile profile, Attack attack,
+                                 double resistance, boolean heightLimited, boolean jumpReset, double clickDensityReduction) {
         var classic = profile.classic();
         boolean melee = hit.type().melee();
         Vector direction = melee ? meleeDirection(attack.direction(), attack.facing())
@@ -33,17 +39,39 @@ public final class ClassicKnockbackMath {
             horizontal += bonus;
             if (bonus > 0) vertical += classic.sprintVertical();
         } else if (attack.punch() > 0) horizontal += 0.6 * attack.punch();
-        Vector push = direction.multiply(horizontal);
         double resistanceScale = classic.respectResistance() ? 1 - Math.clamp(resistance, 0, 1) : 1;
+        double horizontalPush = horizontal * resistanceScale;
         double horizontalRetention = classic.horizontalRetention();
         double verticalRetention = classic.verticalRetention();
         if (jumpReset) {
             horizontalRetention = Math.max(horizontalRetention, 0.5);
             verticalRetention = Math.max(verticalRetention, 0.5);
         }
-        Vector result = new Vector(before.getX() * horizontalRetention + push.getX() * resistanceScale,
+        Vector result = new Vector(before.getX() * horizontalRetention + direction.getX() * horizontalPush,
                 Math.min(classic.verticalMax(), before.getY() * verticalRetention + vertical * resistanceScale),
-                before.getZ() * horizontalRetention + push.getZ() * resistanceScale);
+                before.getZ() * horizontalRetention + direction.getZ() * horizontalPush);
+        if (jumpReset && melee && horizontalPush > 0) {
+            double minimumForward = horizontalPush * JUMP_RESET_MIN_FORWARD_FRACTION;
+            double forward = result.getX() * direction.getX() + result.getZ() * direction.getZ();
+            if (forward < minimumForward) {
+                // Correct only the opposing component; strafe momentum and vertical lift remain intact.
+                double correction = minimumForward - forward;
+                result.setX(result.getX() + direction.getX() * correction);
+                result.setZ(result.getZ() + direction.getZ() * correction);
+            }
+        }
+        if (melee && horizontalPush > 0 && Double.isFinite(clickDensityReduction) && clickDensityReduction > 0) {
+            double forward = result.getX() * direction.getX() + result.getZ() * direction.getZ();
+            double minimumForward = horizontalPush * JUMP_RESET_MIN_FORWARD_FRACTION;
+            if (forward > minimumForward) {
+                double reduced = Math.max(minimumForward,
+                        forward * (1 - Math.min(clickDensityReduction, ClassicClickDensity.MAX_REDUCTION)));
+                // Reduce only retreat along this hit; do not change strafe or vertical motion.
+                double correction = forward - reduced;
+                result.setX(result.getX() - direction.getX() * correction);
+                result.setZ(result.getZ() - direction.getZ() * correction);
+            }
+        }
         if (melee && classic.yLimit() && heightLimited) result.setY(classic.verticalAfterLimit());
         // A modern impulse cap would make the final velocity depend on the victim's old momentum.
         return result.subtract(before);

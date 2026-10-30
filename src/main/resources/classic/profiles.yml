@@ -18,6 +18,8 @@ defaults:
     recast-delay-ticks: 1
     horizontal-speed-multiplier: 1.10
     vertical-speed-multiplier: 1.0
+    # 下落加速度倍率，1.0 原版；建议 1.5，范围 1.0～4.0，不是出杆初速度倍率。
+    gravity-multiplier: 1.0
     max-distance: 24.0
     max-lifetime-ticks: 0
     # 0.4 对应完整基础向量；命中走 0 伤害投射物受击判定，显示受击并击退。
@@ -45,6 +47,8 @@ profiles:
       recast-delay-ticks: 0
       horizontal-speed-multiplier: 1.15
       vertical-speed-multiplier: 1.0
+      # 加快鱼钩下落可改为 1.5；仅空中未命中的飞行阶段生效。
+      gravity-multiplier: 1.0
       max-distance: 24.0
       max-lifetime-ticks: 0
       # classic 的强度倍率为 impact-strength / 0.4；0.4 不额外削弱向量。

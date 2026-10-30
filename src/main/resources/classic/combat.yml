@@ -12,6 +12,10 @@ rod-hit-interval-ticks: 10
 # 两个 rod 字段兼容旧配置，可单独延长保护；三项均为 1..40。
 rod-melee-interval-ticks: 10
 disable-sweep: true
+# 旧版命中反馈：隐藏现代伤害指示粒子和强击/弱击/暴击/击退/无伤害攻击提示音。
+# 保留受击变红、受伤声、暴击/附魔粒子、挥手与既有固定受击晃动。
+# 仅影响 classic 接收玩家的视听效果，不改变 KB、伤害或受击间隔；false 可恢复这些现代效果。
+legacy-hit-effects: true
 # 在本次受击的 PlayerVelocityEvent 中保护发包时的实际向量，包含 KBS 直接改实体速度的情况。
 # modern 不使用此保护，按 modern/config.yml 的 KnockbackSync 策略处理。
 protect-velocity-from-sync: true
@@ -21,6 +25,12 @@ protect-velocity-from-sync: true
 # 兼容旧字段 reset-sprint-on-hit；升级时请替换旧字段，勿保留相互矛盾的两个值。
 stop_sprint: false
 # 核对跳跃输入、跳跃事件及成功移动后，在短窗口内保留半动量，模拟 jump reset。
+# 反向动量最多抵消本次实际水平推力的 75%，至少保留 25%；侧向动量和跳跃 Y 不受此限制。
 # 普通击飞、取消/重定向的移动不算主动跳跃；窗口按受击者服务器 tick 计时。
 jump-reset-enabled: true
 jump-reset-window-ticks: 2
+# CPS 密度：读取当前或前一 tick 内较密集的一组实体攻击尝试，不统计挥空/右键。
+# 每 tick 1 次无额外减退；2/3/4/5 次分别减少自身本次水平退速的 5%/10%/15%/20%，5 次封顶。
+# 受击时只使用已经收到的点击，不追溯修改旧 KB；与 jump reset 共用 25% 实际推力下限。
+# 不缩短受击间隔、不增加伤害或对方 KB，不重复发送速度；新项会自动补全。
+click-density-enabled: true

@@ -23,6 +23,8 @@ profiles:
       recast-delay-ticks: 0
       horizontal-speed-multiplier: 1.15
       vertical-speed-multiplier: 1.0
+      # 更快下落的试用起点；设为 1.0 恢复原版加速度。
+      gravity-multiplier: 1.5
       max-distance: 24.0
       max-lifetime-ticks: 0
       # 力度必须显式设置；0.4 对应完整 classic 向量，0.2 会减半。

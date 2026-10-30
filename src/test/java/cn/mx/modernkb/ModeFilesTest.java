@@ -39,6 +39,43 @@ public class ModeFilesTest {
         assertEquals(classic, Files.readString(root.resolve("classic/profiles.yml")));
         assertEquals(Files.readString(root.resolve("profiles.yml")), Files.readString(root.resolve("modern/profiles.yml")));
     }
+    @Test public void legacyEffectsCompleteOldConfigsWithoutChangingTimingOrKb() throws Exception {
+        Path root = temporary.getRoot().toPath(); ModeFiles files = new ModeFiles(root); files.initialize();
+        Path combat = root.resolve("classic/combat.yml");
+        var old = YamlFiles.load(combat);
+        old.set("legacy-hit-effects", null); old.set("hit-interval-ticks", 9);
+        YamlFiles.save(combat, old);
+        String profiles = Files.readString(root.resolve("classic/profiles.yml"));
+        var upgraded = files.load(CombatMode.CLASSIC);
+        assertTrue(upgraded.classic().legacyHitEffects());
+        assertEquals(9, upgraded.classic().hitIntervalTicks());
+        assertTrue(YamlFiles.load(combat).getBoolean("legacy-hit-effects"));
+        assertEquals(profiles, Files.readString(root.resolve("classic/profiles.yml")));
+        String completed = Files.readString(combat);
+        files.load(CombatMode.CLASSIC);
+        assertEquals(completed, Files.readString(combat));
+    }
+    @Test public void legacyEffectsOptOutSurvivesReloadModeSwitchAndRestart() throws Exception {
+        Path root = temporary.getRoot().toPath(); ModeFiles files = new ModeFiles(root); files.initialize();
+        Path combat = root.resolve("classic/combat.yml");
+        var yaml = YamlFiles.load(combat); yaml.set("legacy-hit-effects", false); YamlFiles.save(combat, yaml);
+        assertFalse(files.load(CombatMode.CLASSIC).classic().legacyHitEffects());
+        files.save(CombatMode.MODERN); files.load(CombatMode.MODERN); files.save(CombatMode.CLASSIC);
+        ModeFiles restarted = new ModeFiles(root); restarted.initialize();
+        assertEquals(CombatMode.CLASSIC, restarted.selected());
+        assertFalse(restarted.load(restarted.selected()).classic().legacyHitEffects());
+        assertTrue(new ClassicSettings(10, 10, true, true, false, true, 2, 10, false).legacyHitEffects());
+    }
+    @Test public void legacyEffectsRejectInvalidTypesWithoutOverwritingConfig() throws Exception {
+        Path root = temporary.getRoot().toPath(); ModeFiles files = new ModeFiles(root); files.initialize();
+        Path combat = root.resolve("classic/combat.yml");
+        for (String value : List.of("1", "'true'", "[]")) {
+            String invalid = "legacy-hit-effects: " + value + "\n";
+            Files.writeString(combat, invalid);
+            assertThrows(IllegalArgumentException.class, () -> files.load(CombatMode.CLASSIC));
+            assertEquals(invalid, Files.readString(combat));
+        }
+    }
     @Test public void invalidTargetDoesNotChangeSavedModeOrDestroyFile() throws Exception {
         Path root = temporary.getRoot().toPath(); ModeFiles files = new ModeFiles(root); files.initialize();
         Files.writeString(root.resolve("classic/combat.yml"), "hit-interval-ticks: 0\n");
@@ -158,5 +195,47 @@ public class ModeFilesTest {
         Files.writeString(combat, "stop_sprint: true\n");
         assertTrue(files.load(CombatMode.CLASSIC).classic().stopSprint());
         assertEquals(CombatMode.MODERN, files.selected());
+    }
+    @Test public void clickDensityCompletesOldConfigsAndHonorsExplicitDisableAcrossRestart() throws Exception {
+        Path root = temporary.getRoot().toPath(); ModeFiles files = new ModeFiles(root); files.initialize();
+        Path combat = root.resolve("classic/combat.yml");
+        Files.writeString(combat, "hit-interval-ticks: 9\njump-reset-window-ticks: 2\n");
+        assertTrue(files.load(CombatMode.CLASSIC).classic().clickDensityEnabled());
+        assertEquals(9, files.load(CombatMode.CLASSIC).classic().hitIntervalTicks());
+        assertTrue(YamlFiles.load(combat).getBoolean("click-density-enabled"));
+        var yaml = YamlFiles.load(combat); yaml.set("click-density-enabled", false); YamlFiles.save(combat, yaml);
+        assertFalse(new ModeFiles(root).load(CombatMode.CLASSIC).classic().clickDensityEnabled());
+        assertTrue(new ClassicSettings(10, 10, true, true, false, true, 2, 10).clickDensityEnabled());
+        Files.writeString(combat, "click-density-enabled: 'true'\n");
+        assertThrows(IllegalArgumentException.class, () -> files.load(CombatMode.CLASSIC));
+        assertEquals("click-density-enabled: 'true'\n", Files.readString(combat));
+    }
+    @Test public void rodGravityCompletesOldModesAndPersistsPerProfileAcrossRestart() throws Exception {
+        Path root = temporary.getRoot().toPath(); ModeFiles files = new ModeFiles(root); files.initialize();
+        for (var mode : CombatMode.values()) {
+            Path profiles = root.resolve(mode.key()).resolve("profiles.yml");
+            var yaml = YamlFiles.load(profiles);
+            yaml.set("defaults.rod.gravity-multiplier", null);
+            yaml.set("profiles.fishing_rod.rod.gravity-multiplier", null);
+            YamlFiles.save(profiles, yaml);
+            assertEquals(1, files.load(mode).profiles().get("fishing_rod").rod().gravityMultiplier(), 0);
+            assertEquals(1, YamlFiles.load(profiles).getDouble("defaults.rod.gravity-multiplier"), 0);
+            yaml = YamlFiles.load(profiles);
+            yaml.set("defaults.rod.gravity-multiplier", 1.3);
+            yaml.set("profiles.fishing_rod.rod.gravity-multiplier", null);
+            YamlFiles.save(profiles, yaml);
+            assertEquals(1.3, files.load(mode).profiles().get("fishing_rod").rod().gravityMultiplier(), 0);
+            yaml = YamlFiles.load(profiles);
+            yaml.set("profiles.fishing_rod.rod.gravity-multiplier", 1.5);
+            YamlFiles.save(profiles, yaml);
+            assertEquals(1.5, new ModeFiles(root).load(mode).profiles().get("fishing_rod").rod().gravityMultiplier(), 0);
+        }
+        Path profiles = root.resolve("classic/profiles.yml");
+        var yaml = YamlFiles.load(profiles);
+        for (Object invalid : List.of(0, -1, 0.5, 4.1, "1.5")) {
+            yaml.set("profiles.fishing_rod.rod.gravity-multiplier", invalid); YamlFiles.save(profiles, yaml);
+            assertThrows(IllegalArgumentException.class, () -> files.load(CombatMode.CLASSIC));
+        }
+        assertEquals(1, new KnockbackProfile.Rod(true, 2, 0, 1, 1, 24, 0, 0.4).gravityMultiplier(), 0);
     }
 }

@@ -138,11 +138,11 @@ public class ClassicKnockbackMathTest {
             before.setY(before.getY() - 0.18);
         }
     }
-    @Test public void jumpResetRetainsExactlyHalfOfMirroredStrafeMomentumAtEveryHeading() {
+    @Test public void normalJumpResetRetainsHalfOfMirroredStrafeMomentumAtEveryHeading() {
         var profile = KnockbackMathTest.profile();
         var hit = KnockbackMathTest.hit(HitType.MELEE, false, false, false, 1, false);
         for (double angle : new double[]{0, 0.3, Math.PI / 2, Math.PI, 4.7})
-            for (double forwardSpeed : new double[]{-0.8, 0, 0.8})
+            for (double forwardSpeed : new double[]{-0.3, 0, 0.8})
                 for (int side : new int[]{-1, 1}) {
                     Vector before = rotate(new Vector(forwardSpeed, 0.42, side * 0.2), angle);
                     Vector direction = rotate(new Vector(1, 0, 0), angle);
@@ -162,10 +162,118 @@ public class ClassicKnockbackMathTest {
                     assertEquals(0.45775, local.getY(), 1e-12);
                 }
     }
+    @Test public void jumpResetCannotCancelOrReverseThePushAtAnyHeading() {
+        var hit = KnockbackMathTest.hit(HitType.MELEE, false, false, false, 1, false);
+        var profile = KnockbackMathTest.profile();
+        for (double angle : new double[]{0, 0.3, Math.PI / 2, Math.PI, 4.7})
+            for (double speed : new double[]{-0.6, -0.8, -2, -20})
+                for (int side : new int[]{-1, 1}) {
+                    Vector before = rotate(new Vector(speed, 0.42, side * 0.2), angle);
+                    Vector original = before.clone();
+                    Vector direction = rotate(new Vector(1, 0, 0), angle);
+                    var attack = new ClassicKnockbackMath.Attack(direction, direction.clone(), false, 0, 0, 1);
+                    Vector after = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                            profile, attack, 0, false, true));
+                    Vector local = rotate(after, -angle);
+                    assertEquals(0.1, local.getX(), 1e-12);
+                    assertEquals(side * 0.1, local.getZ(), 1e-12);
+                    assertEquals(0.45775, after.getY(), 1e-12);
+                    assertEquals(original, before);
+                    assertEquals(rotate(new Vector(1, 0, 0), angle), direction);
+                }
+    }
+    @Test public void jumpResetFloorUsesTheFullPushAfterResistanceAndConfiguredRetention() {
+        var hit = KnockbackMathTest.hit(HitType.MELEE, false, true, false, 1, false);
+        Vector before = new Vector(-20, 0.42, 0.3);
+        for (double retention : new double[]{0, 0.8, 1})
+            for (boolean sprint : new boolean[]{false, true})
+                for (int enchantment : new int[]{0, 2})
+                    for (double resistance : new double[]{0, 0.6, 0.9}) {
+                        var profile = KnockbackMathTest.profile("classic.horizontal-retention", retention);
+                        Vector after = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                                profile, attack(sprint, enchantment, 0), resistance, false, true));
+                        double push = (0.4 + (sprint ? 0.5 : 0) + enchantment * 0.5) * (1 - resistance);
+                        assertEquals(push * 0.25, after.getX(), 1e-12);
+                        assertEquals(before.getZ() * Math.max(retention, 0.5), after.getZ(), 1e-12);
+                    }
+    }
+    @Test public void jumpResetFloorDoesNotInventPushOrOverrideOrdinaryRetention() {
+        var hit = KnockbackMathTest.hit(HitType.MELEE, false, false, false, 1, false);
+        Vector before = new Vector(-2, 0.42, 0.2);
+        Vector immune = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                KnockbackMathTest.profile(), attack(false, 0, 0), 1, false, true));
+        assertEquals(new Vector(-1, 0.21, 0.1), immune);
+        Vector disabledPush = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                KnockbackMathTest.profile("classic.horizontal", 0), attack(false, 0, 0), 0, false, true));
+        assertEquals(-1, disabledPush.getX(), 1e-12);
+        Vector ordinary = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                KnockbackMathTest.profile("classic.horizontal-retention", 0.5), attack(false, 0, 0), 0, false, false));
+        assertEquals(-0.6, ordinary.getX(), 1e-12);
+        Vector ignoreResistance = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                KnockbackMathTest.profile("classic.respect-resistance", false), attack(false, 0, 0), 1, false, true));
+        assertEquals(0.1, ignoreResistance.getX(), 1e-12);
+    }
     private static Vector rotate(Vector vector, double angle) {
         double cosine = Math.cos(angle), sine = Math.sin(angle);
         return new Vector(vector.getX() * cosine - vector.getZ() * sine, vector.getY(),
                 vector.getX() * sine + vector.getZ() * cosine);
+    }
+    @Test public void clickDensityReducesOnlyRetreatAndIsSymmetricAtEveryHeading() {
+        var hit = KnockbackMathTest.hit(HitType.MELEE, false, false, false, 1, false);
+        var profile = KnockbackMathTest.profile("classic.horizontal-retention", 0.5);
+        for (double angle : new double[]{0, 0.3, Math.PI / 2, Math.PI, 4.7}) {
+            Vector before = rotate(new Vector(0, 0.42, 0.2), angle);
+            Vector direction = rotate(new Vector(1, 0, 0), angle);
+            var attack = new ClassicKnockbackMath.Attack(direction, direction.clone(), false, 0, 0, 1);
+            Vector ordinary = before.clone().add(ClassicKnockbackMath.impulse(before, hit, profile, attack, 0, false, false));
+            Vector dense = before.clone().add(ClassicKnockbackMath.impulse(before, hit, profile, attack, 0, false, false, 0.2));
+            Vector local = rotate(dense, -angle);
+            assertEquals(0.32, local.getX(), 1e-12);
+            assertEquals(0.1, local.getZ(), 1e-12);
+            assertEquals(ordinary.getY(), dense.getY(), 1e-12);
+        }
+    }
+    @Test public void clickDensityAndJumpResetShareTheResistanceAdjustedFloor() {
+        var hit = KnockbackMathTest.hit(HitType.MELEE, false, false, false, 1, false);
+        for (double resistance : new double[]{0, 0.6, 0.9}) {
+            Vector before = new Vector(-2, 0.42, 0.2);
+            Vector after = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                    KnockbackMathTest.profile(), attack(false, 0, 0), resistance, false, true, 0.2));
+            assertEquals(0.4 * (1 - resistance) * 0.25, after.getX(), 1e-12);
+            assertEquals(0.1, after.getZ(), 1e-12);
+            assertEquals(0.21 + 0.24775 * (1 - resistance), after.getY(), 1e-12);
+        }
+        Vector before = new Vector(-0.3, 0.42, 0.2);
+        Vector after = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                KnockbackMathTest.profile(), attack(false, 0, 0), 0, false, true, 0.2));
+        assertEquals(0.2, after.getX(), 1e-12); // Ordinary jump reset is 0.25; density reduces it by 20%.
+    }
+    @Test public void clickDensityNeverExceedsItsCapOrInventsPushOnImmuneAndZeroPushHits() {
+        var hit = KnockbackMathTest.hit(HitType.MELEE, true, true, false, 1, false);
+        for (double reduction : new double[]{0.2, 1, 100}) {
+            Vector after = ClassicKnockbackMath.impulse(new Vector(), hit,
+                    KnockbackMathTest.profile(), attack(true, 2, 0), 0.6, false, false, reduction);
+            assertEquals(1.9 * 0.4 * 0.8, after.getX(), 1e-12);
+        }
+        assertEquals(0, ClassicKnockbackMath.impulse(new Vector(), hit, KnockbackMathTest.profile(),
+                attack(false, 0, 0), 1, false, false, 0.2).getX(), 0);
+        assertEquals(0, ClassicKnockbackMath.impulse(new Vector(), hit, KnockbackMathTest.profile("classic.horizontal", 0),
+                attack(false, 0, 0), 0, false, false, 0.2).getX(), 0);
+        for (double invalid : new double[]{-1, Double.NaN, Double.POSITIVE_INFINITY})
+            assertEquals(0.4, ClassicKnockbackMath.impulse(new Vector(), hit, KnockbackMathTest.profile(),
+                    attack(false, 0, 0), 0, false, false, invalid).getX(), 0);
+    }
+    @Test public void clickDensityDoesNotAlterProjectilesOrPreexistingReverseRetention() {
+        for (HitType type : new HitType[]{HitType.FISHING_ROD, HitType.ARROW, HitType.CROSSBOW}) {
+            var hit = KnockbackMathTest.hit(type, false, false, false, 1, false);
+            assertEquals(new Vector(0.4, 0.24775, 0), ClassicKnockbackMath.impulse(new Vector(), hit,
+                    KnockbackMathTest.profile(), attack(false, 0, 0), 0, false, false, 0.2));
+        }
+        Vector before = new Vector(-2, 0.42, 0.2);
+        var hit = KnockbackMathTest.hit(HitType.MELEE, false, false, false, 1, false);
+        Vector after = before.clone().add(ClassicKnockbackMath.impulse(before, hit,
+                KnockbackMathTest.profile("classic.horizontal-retention", 0.5), attack(false, 0, 0), 0, false, false, 0.2));
+        assertEquals(-0.6, after.getX(), 1e-12);
     }
     @Test public void overlappingMeleeDirectionDependsOnYawNotTinyOffsetsHeightOrCriticalFlag() {
         for (boolean critical : new boolean[]{false, true})

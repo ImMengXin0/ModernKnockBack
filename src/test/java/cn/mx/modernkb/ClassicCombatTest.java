@@ -21,6 +21,7 @@ import org.bukkit.entity.*;
 import org.bukkit.event.Event;
 import org.bukkit.event.entity.*;
 import org.bukkit.event.player.PlayerVelocityEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.persistence.*;
 import org.bukkit.plugin.*;
 import org.bukkit.util.Vector;
@@ -149,6 +150,102 @@ public class ClassicCombatTest {
     private EntityKnockbackEvent knockback() {
         return new com.destroystokyo.paper.event.entity.EntityKnockbackByEntityEvent(victim, attacker,
                 EntityKnockbackEvent.Cause.ENTITY_ATTACK, 0.4f, new Vector(0.4, 0.4, 0));
+    }
+    private PrePlayerAttackEntityEvent densityClick(Player clicker, LivingEntity target) {
+        var event = new PrePlayerAttackEntityEvent(clicker, target, true);
+        classic.beforeAttack(event); classic.attackDensity(event);
+        return event;
+    }
+    private double incomingHorizontal(Player receiver, Player source, HitType type) {
+        var context = new HitContext(receiver.getUniqueId(), source.getUniqueId(), source.getUniqueId(), type,
+                CombatantKind.PLAYER, CombatantKind.PLAYER, "ENTITY_ATTACK", true, false, false, 1, false);
+        var event = new com.destroystokyo.paper.event.entity.EntityKnockbackByEntityEvent(receiver, source,
+                EntityKnockbackEvent.Cause.ENTITY_ATTACK, 0.4f, new Vector(0.4, 0.4, 0));
+        var result = classic.calculate(event, context, KnockbackMathTest.profile(), settings);
+        assertNotNull(result);
+        return receiver.getVelocity().clone().add(result.impulse()).getX();
+    }
+    @Test public void clickDensityReducesOnlyTheClickersNewMeleeKnockbackAndExpires() {
+        for (int i = 0; i < 5; i++) assertFalse(densityClick(victim, attacker).isCancelled());
+        assertEquals(0.32, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        assertEquals(-0.4, incomingHorizontal(attacker, victim, HitType.MELEE), 1e-12);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.FISHING_ROD), 1e-12);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.ARROW), 1e-12);
+        when(victim.getTicksLived()).thenReturn(101);
+        assertEquals(0.32, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        when(victim.getTicksLived()).thenReturn(102);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        verify(victim, never()).setVelocity(any());
+        verify(attacker, never()).setVelocity(any());
+    }
+    @Test public void hurtWindowClicksCountButCannotOpenDamageOrStackKnockback() {
+        classic.acceptedDamage(damage());
+        for (int i = 0; i < 100; i++) assertTrue(densityClick(attacker, victim).isCancelled());
+        assertEquals(-0.32, incomingHorizontal(attacker, victim, HitType.MELEE), 1e-12);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        var earlyDamage = damage(); when(earlyDamage.isCancelled()).thenReturn(false);
+        classic.guardDamage(earlyDamage);
+        verify(earlyDamage).setCancelled(true);
+        assertEquals(101, classic.preventedHits());
+        when(victim.getTicksLived()).thenReturn(109);
+        assertTrue(densityClick(attacker, victim).isCancelled());
+        when(victim.getTicksLived()).thenReturn(110);
+        assertFalse(densityClick(attacker, victim).isCancelled());
+        assertEquals(0, classic.applied());
+    }
+    @Test public void externalCancelledAttacksAndNonAttackAttemptsDoNotGrantDensity() {
+        for (int i = 0; i < 5; i++) {
+            var event = new PrePlayerAttackEntityEvent(victim, attacker, true);
+            classic.beforeAttack(event); event.setCancelled(true); classic.attackDensity(event);
+            var invalid = new PrePlayerAttackEntityEvent(victim, attacker, false);
+            classic.beforeAttack(invalid); classic.attackDensity(invalid);
+        }
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        // A listener invoked twice for the same event must not count another click.
+        var single = densityClick(victim, attacker); classic.attackDensity(single);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+    }
+    @Test public void clicksArrivingAfterCalculationCannotRetroactivelyRewriteAnOldHit() {
+        var context = tracker.context(victim, attacker, "ENTITY_ATTACK", false);
+        var oldHit = classic.calculate(knockback(), context, KnockbackMathTest.profile(), settings);
+        for (int i = 0; i < 20; i++) densityClick(victim, attacker);
+        assertEquals(0.4, oldHit.impulse().getX(), 1e-12);
+        assertEquals(0.32, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        verify(victim, never()).setVelocity(any());
+        verify(victim.getScheduler(), never()).runDelayed(any(), any(), any(), anyLong());
+    }
+    @Test public void changingTargetsCannotMultiplyDensityPastTheSamePlayerTickCap() {
+        Player other = player(2); when(tracker.kind(other)).thenReturn(CombatantKind.PLAYER);
+        for (int i = 0; i < 40; i++) densityClick(victim, i % 2 == 0 ? attacker : other);
+        assertEquals(0.32, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        when(victim.getGameMode()).thenReturn(GameMode.CREATIVE);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        when(victim.getGameMode()).thenReturn(GameMode.SURVIVAL);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+    }
+    @Test public void clickDensityClearsOnTeleportReloadExclusionBotAndConfigChange() throws Exception {
+        for (int i = 0; i < 5; i++) densityClick(victim, attacker);
+        classic.teleport(new PlayerTeleportEvent(victim, victim.getLocation(), victim.getLocation()));
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        for (int i = 0; i < 5; i++) densityClick(victim, attacker);
+        classic.refreshAll();
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        for (int i = 0; i < 5; i++) densityClick(victim, attacker);
+        store.excluded(victim.getUniqueId(), true);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        store.excluded(victim.getUniqueId(), false);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        for (int i = 0; i < 5; i++) densityClick(victim, attacker);
+        when(tracker.kind(victim)).thenReturn(CombatantKind.BOT);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        when(tracker.kind(victim)).thenReturn(CombatantKind.PLAYER);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        for (int i = 0; i < 5; i++) densityClick(victim, attacker);
+        settings = settings.withMode(CombatMode.CLASSIC, new ClassicSettings(10, 10, true, true, false, true, 2, 10, false));
+        for (int i = 0; i < 5; i++) densityClick(victim, attacker);
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
+        assertEquals(0.4, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
     }
     @Test public void coincidentCriticalHitNeverUsesRandomNativeKnockbackDirection() {
         when(attacker.getLocation()).thenReturn(new Location(null, 0, 64, 0, 0, 80));

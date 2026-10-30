@@ -11,7 +11,7 @@ plugins/ModernKnockBack/
   classic/
     config.yml             # 玩家、Bot、弓箭、鱼竿与对战路由
     profiles.yml           # 基础速度、动量、疾跑、附魔、鱼竿
-    combat.yml             # 受击间隔、鱼竿间隔、横扫、疾跑重置与跳跃重置
+    combat.yml             # 受击间隔、旧版命中反馈、横扫、疾跑/跳跃重置与 CPS 密度
   modern/
     config.yml             # 高版本路由及 KnockbackSync 策略
     profiles.yml           # 高版本增量/native 向量及鱼竿参数
@@ -27,6 +27,8 @@ plugins/ModernKnockBack/
 
 ## Classic 攻击与防叠刀
 
+`legacy-hit-effects: true` 默认减少现代伤害指示粒子及攻击附加音效，保留受击变红、受伤声、挥手和暴击/附魔粒子。仅控制接收端视听效果，支持重载和自动补全；KB、伤害、免疫窗口和客户端模型渲染不由此开关更改，详见 [观感说明](CLASSIC-FEEL.md)。
+
 玩家使用本插件命名空间下的临时 ATTACK_SPEED +1024 属性，令高版本原生伤害及疾跑资格不再等待蓄力。不会覆盖基础值或装备 modifier，换武器也无需重写基础属性。核心按半 tick 采样攻击蓄力，该速度使采样满蓄力；无需取消正常伤害再 damage() 补造一次攻击。
 
 受击间隔与蓄力独立。classic/combat.yml 中 hit-interval-ticks 默认 10，即 20 TPS 下 500ms，接近 1.8 常规伤害免疫窗口；maximumNoDamageTicks 对应 20。间隔设为 8 时对应 16。玩家仍可连续挥刀，但窗口内点击不再伤害同一目标，也不会排队延后执行。
@@ -40,6 +42,8 @@ classic 默认 `stop_sprint: false`，与旧 KnockbackManager 的同名字段一
 `jump-reset-enabled: true` 时，2.0.4 起同时核对跳跃输入、Paper 跳跃事件和对应的成功移动。单纯离地或正向 Y 速度不能建立 jump reset；被取消或重定向的移动、飞行/滑翔/游泳/载具和 Bot 不使用该技巧。输入与移动在同 tick 内先后到达均可识别，后续松开跳跃键不取消已成功的起跳；下一 tick 新按的跳跃不能追溯改变之前的击飞。命中发生在 `jump-reset-window-ticks`（默认 2 tick，含边界）内且玩家仍有向上速度时，classic 保留命中前水平与垂直速度的至少一半，再叠加经典推力。它不改变主要 KB 参数。客户端未提供跳跃输入时采用普通空中向量；该规则是技巧模拟，不是完整 1.8 物理还原。
 
 同一受击者共享窗口，防止更高伤害绕过原生免疫造成叠刀。攻击前先拦截，伤害事件兜底；不会逐击清空 noDamageTicks 或延迟重放速度。默认取消横扫伤害和横扫 KB，让刀剑攻击只处理目标。
+
+2.2.0 限制 jump reset 的反向动量，至少保留本次实际水平推力的 25%。另新增 `click-density-enabled: true`，按当前与前一 tick 中较密集的一组实体攻击尝试，在新近战受击时最多额外减少 20% 的水平退速；与 jump reset 共用下限，受击保护期内的密集攻击不能增加伤害或对方 KB。配置自动补齐，详见 [CPS 密度](CLICK-DENSITY.md)。
 
 classic 接收端屏蔽 `minecraft:entity.player.attack.sweep` 横扫音效，2.0.3 同时屏蔽 `SWEEP_ATTACK` 横扫剑气粒子。核心在伤害事件之前就播放横扫声，所以需要在现有客户端规则中过滤音效/粒子包及组合包，不能只取消横扫伤害。受伤、暴击和鱼竿声音以及暴击/伤害粒子正常；切回 modern、排除玩家或卸载时恢复。此规则随 classic 生效，无新增配置项；即使显式关闭 disable-sweep，classic 仍然屏蔽横扫声音和剑气。普通挥手动画保留。
 

@@ -1,11 +1,13 @@
 # ModernKnockBack 1.21.11 使用与接口
 
-当前版本 2.0.5，classic 恢复旧版固定受击倾斜，成功鱼钩原生附着且仅对被钩玩家隐藏，并修复 Leaf 立即同步时第二次速度事件的保护，见 [视角、鱼钩与同步](CLASSIC-FEEL.md)。每枚鱼钩只触发一次受击，右键收杆不拉回目标；继续屏蔽横扫音效和剑气粒子。普通近战保持原生3.0格距离，保留2.0.1贴身暴击方向修复。classic 鱼钩使用固定0.3格碰撞余量，连续杆及竿接刀默认保护10 tick，保留即时KB、防互推。源码依据见 [鱼竿修复](CLASSIC-ROD-STACK.md)，技巧复测见 [Classic 技巧与延迟](CLASSIC-TECHNIQUES.md)。自动补全见 [配置补全](CONFIG-COMPLETION.md)，双模式及接口见 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
+当前版本 2.2.0，在原始 2.0.5 基础上保留 jump reset 反向动量上限、[CPS 密度](CLICK-DENSITY.md)和鱼钩空中重力倍率，新增 `classic/combat.yml` 的 `legacy-hit-effects: true`。默认隐藏现代伤害指示粒子及攻击附加音效，保留受击变红、受伤声、挥手和暴击/附魔粒子；开关自动补全，可重载，详见 [视角、命中反馈、鱼钩与同步](CLASSIC-FEEL.md)。客户端模型及持刀动画并未替换。
+
+classic 保留固定受击倾斜、Leaf 立即同步第二次速度事件保护及鱼钩原生附着。被钩玩家看不到挡脸鱼钩；每枚钩只触发一次受击，右键收杆不拉回，连续杆及竿接刀默认保护10 tick。普通近战保持原生3.0格距离、贴身暴击方向修复，鱼钩保持0.3格碰撞余量。源码依据见 [鱼竿修复](CLASSIC-ROD-STACK.md)，技巧复测见 [Classic 技巧与延迟](CLASSIC-TECHNIQUES.md)，配置规则见 [配置补全](CONFIG-COMPLETION.md)和 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
 
 ## 安装
 
 1. 使用 Java 21 或更高版本，服务器版本必须为 Minecraft 1.21.11。
-2. 把 `ModernKnockBack-2.0.5.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
+2. 把 `ModernKnockBack-2.2.0.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
 3. 启动后检查 `/mkb status`，编辑当前模式目录 `plugins/ModernKnockBack/modern/` 或 `classic/` 内的配置，用 `/mkb reload` 重载，用 `/kbtest classic` 或 `/kbtest modern` 切换。
 4. 配置错误会拒绝应用，并保留当前已加载配置。启动时配置损坏会明确报错、停止启用，不会生成一份默认配置覆盖损坏文件。
 
@@ -99,11 +101,25 @@ profiles:
 | `recast-delay-ticks` | 成功收杆后再次抛投的间隔；0 不限，最大1200 |
 | `horizontal-speed-multiplier` | 鱼钩初期飞行 X/Z 速度倍率，默认1，范围0～4 |
 | `vertical-speed-multiplier` | 鱼钩初期飞行 Y 速度倍率，默认1，范围0～4 |
+| `gravity-multiplier` | 空中下落加速度倍率，默认1，范围1～4；1为原版，推荐先试1.5。仅增加飞行期间的向下加速度，不缩放出杆初速度 |
 | `max-distance` | 距离鱼钩首个调度 tick 位置的最大范围，0 不额外限制，最大32格；不是距移动中的玩家 |
 | `max-lifetime-ticks` | 从首个调度 tick 起算的钩子存活上限，0 不限，最大12000 |
 | `impact-strength` | 碰撞强度，范围0～2；字段与 defaults 都缺失时回落0关闭。classic 使用此值/0.4 缩放目标向量，0.4 为完整、0.2 为一半；modern 使用原生强度及配置倍率。抗性生效一次 |
 
 “挥杆速度”在服务端可稳定控制的是抛投频率与钩子飞行速度，物品选中与手臂动画仍由客户端处理。1.2.5 在抛投事件中确认新钩子归当前区域拥有后，立即修改初始速度；尚未拥有时回退到钩子的首次实体调度，只缩放一次。距离与寿命监测仍从首个调度 tick 开始，已抛出的钩子沿用抛投时捕获的参数。
+
+2.2.0 的 `gravity-multiplier` 在鱼钩拥有区域内，从首个实体调度 tick 起每 tick 补充 `0.03 × (倍率 - 1)` 的向下加速度，核心继续计算原版重力和阻力。倍率 1.5 相当于每 tick 额外增加 0.015 向下速度，上抛阶段也会更早转为下落；它不是“最终下落速度恒为原来的1.5倍”。挂住实体、接触已消耗、落地、入水或关闭重力的钩子不再额外加速，玩家受击 KB 仍使用独立向量。默认1.0不改变已有轨迹；升级自动补齐缺项并保留自定义值。
+
+加快 classic 鱼钩下落时，在 `classic/profiles.yml` 合并以下字段，执行 `/mkb reload` 后重新出杆；若玩家手动分配了其他 profile，改该 profile 的 rod 段：
+
+```yaml
+profiles:
+  fishing_rod:
+    rod:
+      gravity-multiplier: 1.5
+```
+
+modern 同样支持此项，使用其独立的 `modern/profiles.yml`。
 
 classic/combat.yml 三项 hit-interval-ticks、rod-hit-interval-ticks、rod-melee-interval-ticks 默认均为10。连续杆取前两项最大值，接刀取三项最大值；旧4/1/2配置保留，但不能缩短共同受击窗口。默认零伤害杆 noDamageTicks=20，第10 tick降到10；窗口内连续杆/刀不排队、不刷新免疫。受击保护不限制移动。真实伤害、KB或速度取消时撤回自身临时状态；成功杆立即发送一次速度，仅对被钩玩家隐藏后原生附着，再补固定方向受击效果。出杆者和旁观者仍能看到鱼钩与钓线；取消或免疫接触不附着。classic 飞行鱼钩使用核心线段检测及固定0.3余量；现代路径不改。详见修复文档和验证边界。
 

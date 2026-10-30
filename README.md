@@ -1,4 +1,4 @@
-# ModernKnockBack 2.0.5
+# ModernKnockBack 2.2.0
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -9,22 +9,31 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 - 启动、切换模式及重载时自动补全当前模式缺失配置；保留已配置数值、旧字段与自定义 profile，修改前自动备份。
 - classic 默认只列出 5 个主要 KB 参数；相同命中状态覆盖旧动量，疾跑推力统一方向，关闭默认高度锁定。
 - classic 默认 `stop_sprint: false`，按旧 KnockbackManager 的客户端疾跑状态计算 KB；攻击重置不会消耗下一刀的疾跑附加，真实停止/重新开启疾跑及 jump reset 仍生效。
+- classic jump reset 的反向动量最多抵消本次实际水平推力的 75%，避免将击退完全抵消；侧向走位与正常跳跃收益保留，无需新增配置。
+- classic 支持 CPS 密度：按最近两个 tick 中较密集的单 tick 实体攻击次数，在新近战受击时最多额外减少 20% 的水平退速，与 jump reset 共用 25% 推力下限。`click-density-enabled` 默认开启，升级自动补全，见 [密度规则](docs/CLICK-DENSITY.md)。
 - 玩家、Bot、弓箭、弩、三叉戟、重锤、长矛、横扫、盾牌、风弹、水晶、TNT、一般爆炸独立路由。
 - 狂暴连击、死神提供显式 Java API，不靠猜测伤害名称。
 - Modern 路径的地面/空中水平与垂直倍率、疾跑/暴击/未蓄满额外倍率、增量限幅。
 - Modern 可选原生公式：独立控制新增推力、旧速度保留、地面 Y 上限和空中抬升策略。
-- 鱼竿抛投间隔、收杆间隔、飞行速度、距离、存活时间，以及可选碰撞击退。
+- 鱼竿抛投间隔、收杆间隔、初始飞行速度、空中重力倍率、距离、存活时间，以及可选碰撞击退。
 - classic 鱼钩命中发起真实 0 伤害投射物受击，支持受击动画、声音及经典向量；收杆取消玩家/生物拉回。
 - classic 成功命中后鱼钩挂住目标，仅对被钩玩家隐藏，出杆者与旁观者保留鱼钩和钓线；取消或免疫命中不挂钩。右键正常收回，不拉回目标，同一枚鱼钩只接触一次。
 - classic 本人受击改用旧版固定方向晃动，保留受伤动画；不改玩家朝向。先发送鱼竿速度，再隐藏/挂钩和播放受击效果。
 - classic 连续鱼竿及竿接刀遵守完整受击窗口，默认 10 tick；固定 0.3 格鱼钩碰撞余量，改善近距离横移目标漏判。
 - classic 保留原生命中目标和攻击距离，不再根据挥手包补刀或扩大命中边缘；使用玩家 UUID 排除实体互推，保留鱼钩/箭的碰撞资格，modern 恢复原规则。
 - classic 屏蔽横扫攻击音效与剑气粒子，支持普通包及组合包；modern 和排除玩家恢复原效果。
+- classic 默认开启旧版命中反馈：隐藏现代伤害指示粒子与攻击附加音效，保留受击变红、受伤声、挥手和暴击/附魔粒子。用 `classic/combat.yml` 的 `legacy-hit-effects` 开关对比，见 [观感说明](docs/CLASSIC-FEEL.md)。
 - KnockbackSync 共存策略、Folia 实体调度、配置严格校验与原子保存。
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.0.5.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.2.0.jar`。
+
+2.2.0 基于原始 2.0.5，整合 jump reset 反向动量限制、CPS 密度、鱼钩重力倍率和旧版命中反馈。`legacy-hit-effects` 默认开启并自动补全，减少现代额外粒子和音效，保留受击变红、受伤声、挥手及暴击/附魔粒子。它不替换客户端模型或第一人称持刀动画，完整旧版客户端动画仍需客户端支持。完整变更和升级方法见 [2.2.0 发布说明](docs/RELEASE-2.2.0.md)。
+
+`rod.gravity-multiplier` 控制未命中鱼钩的空中下落加速度，范围 1.0～4.0，默认 1.0 保留原版轨迹。想加快下落时在实际使用 profile 的 rod 段设置 1.5；classic 常用 `profiles.fishing_rod.rod.gravity-multiplier`。配置自动补全，classic / modern 分别读取自己的文件，重载后新抛出的鱼钩生效。
+
+密度减退只在新命中计算一次，保留受击间隔、速度同步与模式隔离，不按点击次数连续乘原生攻击减速。
 
 2.0.5 修复 classic 受击的定向镜头倾斜和鱼钩回弹观感：仅把本人受击包角度归零；成功鱼钩改为原生挂载并对受击者隐藏。修复 Leaf 开启 `flush-location-while-knockback-player` 时，同一击第二次速度事件可再次被同步插件改写的问题，限定保护原生同步调用中的那一次事件。保留原 KB 数值、受击间隔及技巧，不重放速度、不修改核心。升级正常重启即可；实际客户端手感与网络延迟仍须联机复测，详见 [视角、鱼钩与同步说明](docs/CLASSIC-FEEL.md)。
 

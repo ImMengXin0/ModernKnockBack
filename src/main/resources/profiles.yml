@@ -38,6 +38,8 @@ defaults:
     recast-delay-ticks: 0
     horizontal-speed-multiplier: 1.0
     vertical-speed-multiplier: 1.0
+    # 下落加速度倍率，1.0 原版，范围 1.0～4.0。
+    gravity-multiplier: 1.0
     # Distance from hook position at its first scheduled tick, not from the moving player.
     # Native rod distance remains a ceiling; 0 adds no extra restriction.
     max-distance: 0.0

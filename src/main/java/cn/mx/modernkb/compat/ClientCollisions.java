@@ -14,7 +14,7 @@ import org.bukkit.event.*;
 import org.bukkit.event.player.*;
 import org.bukkit.plugin.Plugin;
 
-/** Classic client rules: predicted pushing, sweep effects and a fixed local hurt tilt. */
+/** Classic client rules: predicted pushing, legacy hit effects and a fixed local hurt tilt. */
 public final class ClientCollisions implements Listener, AutoCloseable {
     private static final String HANDLER = "modernkb_collision";
     private final Plugin plugin;
@@ -27,7 +27,11 @@ public final class ClientCollisions implements Listener, AutoCloseable {
     public ClientCollisions(Plugin plugin, Supplier<Settings> settings, PlayerStore players) throws ReflectiveOperationException {
         this.plugin = plugin; this.settings = settings; this.players = players; codec = new TeamPacketCodec();
     }
-    private boolean active(UUID id) { return !closed && settings.get().classicEnabled() && !players.get(id).excluded(); }
+    record View(boolean classic, boolean legacyHitEffects) {}
+    private View view(UUID id) {
+        Settings config = settings.get();
+        return new View(!closed && config.classicEnabled() && !players.get(id).excluded(), config.classic().legacyHitEffects());
+    }
     public void reconcile(Player player) {
         if (closed || !CombatTracker.owns(player)) return;
         UUID id = player.getUniqueId();
@@ -38,8 +42,8 @@ public final class ClientCollisions implements Listener, AutoCloseable {
             var state = new CollisionTeams<Object>(player.getName(), "mkb" + UUID.randomUUID().toString().replace("-", "").substring(0, 13),
                     codec.noCollision(null), codec::noCollision);
             for (Object message : codec.snapshot(player)) state.accept(codec.decode(message));
-            var overlay = new Overlay(channel, state, codec, () -> active(id),
-                    message -> plugin.getLogger().warning(message), player.getEntityId());
+            var overlay = new Overlay(channel, state, codec,
+                    message -> plugin.getLogger().warning(message), player.getEntityId(), () -> view(id));
             if (connections.putIfAbsent(id, overlay) != null) return;
             channel.eventLoop().execute(() -> {
                 if (closed || connections.get(id) != overlay || !channel.isActive()) { connections.remove(id, overlay); return; }
@@ -73,7 +77,7 @@ public final class ClientCollisions implements Listener, AutoCloseable {
         private final Channel channel;
         private final CollisionTeams<Object> state;
         private final TeamPacketCodec codec;
-        private final BooleanSupplier active;
+        private final Supplier<View> view;
         private final Consumer<String> warning;
         private volatile int selfEntityId;
         Overlay(Channel channel, CollisionTeams<Object> state, TeamPacketCodec codec, BooleanSupplier active, Consumer<String> warning) {
@@ -81,11 +85,15 @@ public final class ClientCollisions implements Listener, AutoCloseable {
         }
         Overlay(Channel channel, CollisionTeams<Object> state, TeamPacketCodec codec, BooleanSupplier active,
                 Consumer<String> warning, int selfEntityId) {
-            this.channel = channel; this.state = state; this.codec = codec; this.active = active; this.warning = warning;
+            this(channel, state, codec, warning, selfEntityId, () -> new View(active.getAsBoolean(), true));
+        }
+        Overlay(Channel channel, CollisionTeams<Object> state, TeamPacketCodec codec,
+                Consumer<String> warning, int selfEntityId, Supplier<View> view) {
+            this.channel = channel; this.state = state; this.codec = codec; this.view = view; this.warning = warning;
             this.selfEntityId = selfEntityId;
         }
         void selfEntityId(int id) { selfEntityId = id; }
-        void update(ChannelHandlerContext context) { update(context, active.getAsBoolean()); }
+        void update(ChannelHandlerContext context) { update(context, view.get().classic()); }
         private void update(ChannelHandlerContext context, boolean enabled) {
             if (context == null || !channel.isActive()) return;
             try {
@@ -109,9 +117,10 @@ public final class ClientCollisions implements Listener, AutoCloseable {
             });
         }
         @Override public void write(ChannelHandlerContext context, Object message, ChannelPromise promise) throws Exception {
-            boolean enabled = active.getAsBoolean();
-            update(context, enabled);
-            var output = codec.transform(message, state, enabled, selfEntityId);
+            // One immutable settings snapshot for this packet and every child of a bundle.
+            View current = view.get();
+            update(context, current.classic());
+            var output = codec.transform(message, state, current.classic(), selfEntityId, current.legacyHitEffects());
             if (output.isEmpty()) {
                 // Dropped packets still need a completed write promise; otherwise the
                 // connection's completion listeners can wait forever for a hidden effect.

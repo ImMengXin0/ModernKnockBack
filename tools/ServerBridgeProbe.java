@@ -68,6 +68,7 @@ public final class ServerBridgeProbe {
         require(channel.pipeline().context(overlay) == null, "Handler was not removed");
         channel.finishAndReleaseAll();
         verifySweepEffects(codec, original);
+        verifyLegacyHitEffects(codec);
         verifyHurtAnimation(codec, original);
         System.out.println("Native bridge probe OK (no running server / no client PvP test)");
     }
@@ -365,8 +366,10 @@ public final class ServerBridgeProbe {
         var enabled = new AtomicBoolean(true);
         var state = new CollisionTeams<Object>("Alice", "mkb_sound", codec.noCollision(null), codec::noCollision);
         var channel = new EmbeddedChannel();
-        var overlay = new ClientCollisions.Overlay(channel, state, codec, enabled::get,
-                warning -> { throw new IllegalStateException(warning); });
+        // Turning the new effect option off must retain the existing sweep suppression.
+        var overlay = new ClientCollisions.Overlay(channel, state, codec,
+                warning -> { throw new IllegalStateException(warning); }, -1,
+                () -> new ClientCollisions.View(enabled.get(), false));
         channel.pipeline().addLast("overlay", overlay);
         overlay.refresh(); channel.runPendingTasks();
         while (channel.readOutbound() != null) { }
@@ -409,6 +412,104 @@ public final class ServerBridgeProbe {
         require(channel.readOutbound() == sweepParticle, "Sweep particles not restored after handler removal");
         channel.finishAndReleaseAll();
         System.out.println("Native sweep effects OK: sweep sound/particles hidden; mixed bundles, promises, unrelated effects and mode/disable restoration passed");
+    }
+
+    private static void verifyLegacyHitEffects(TeamPacketCodec codec) throws Exception {
+        var entity = Mockito.mock(net.minecraft.world.entity.Entity.class);
+        var muted = new ArrayList<net.minecraft.network.protocol.Packet<? super net.minecraft.network.protocol.game.ClientGamePacketListener>>();
+        for (var sound : List.of(net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_STRONG,
+                net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_WEAK, net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_KNOCKBACK,
+                net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_CRIT, net.minecraft.sounds.SoundEvents.PLAYER_ATTACK_NODAMAGE)) {
+            var registered = net.minecraft.core.registries.BuiltInRegistries.SOUND_EVENT.wrapAsHolder(sound);
+            var direct = net.minecraft.core.Holder.direct(net.minecraft.sounds.SoundEvent.createVariableRangeEvent(sound.location()));
+            for (var holder : List.of(registered, direct)) {
+                muted.add(new net.minecraft.network.protocol.game.ClientboundSoundPacket(holder,
+                        net.minecraft.sounds.SoundSource.PLAYERS, 1, 64, 2, 1, 1, 1));
+                muted.add(new net.minecraft.network.protocol.game.ClientboundSoundEntityPacket(holder,
+                        net.minecraft.sounds.SoundSource.PLAYERS, entity, 1, 1, 2));
+            }
+        }
+        muted.add(new net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket(
+                net.minecraft.core.particles.ParticleTypes.DAMAGE_INDICATOR, false, false, 1, 64, 2, 0, 0, 0, 0, 5));
+        var preserved = new ArrayList<net.minecraft.network.protocol.Packet<? super net.minecraft.network.protocol.game.ClientGamePacketListener>>();
+        preserved.add(new net.minecraft.network.protocol.game.ClientboundDamageEventPacket(42,
+                net.minecraft.core.Holder.direct(new net.minecraft.world.damagesource.DamageType("player", 0.1f)), 43, 43, Optional.empty()));
+        preserved.add(new net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket(42, new net.minecraft.world.phys.Vec3(0.4, 0.36, -0.3)));
+        for (int action : new int[]{net.minecraft.network.protocol.game.ClientboundAnimatePacket.SWING_MAIN_HAND,
+                net.minecraft.network.protocol.game.ClientboundAnimatePacket.SWING_OFF_HAND,
+                net.minecraft.network.protocol.game.ClientboundAnimatePacket.CRITICAL_HIT,
+                net.minecraft.network.protocol.game.ClientboundAnimatePacket.MAGIC_CRITICAL_HIT})
+            preserved.add(new net.minecraft.network.protocol.game.ClientboundAnimatePacket(entity, action));
+        for (var particle : List.of(net.minecraft.core.particles.ParticleTypes.CRIT, net.minecraft.core.particles.ParticleTypes.ENCHANTED_HIT,
+                net.minecraft.core.particles.ParticleTypes.HEART, net.minecraft.core.particles.ParticleTypes.SMOKE))
+            preserved.add(new net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket(particle, false, false, 1, 64, 2, 0, 0, 0, 0, 5));
+        for (String key : List.of("minecraft:entity.player.hurt", "minecraft:entity.player.death",
+                "minecraft:entity.fishing_bobber.throw", "minecraft:entity.fishing_bobber.retrieve",
+                "custom:entity.player.attack.strong", "minecraft:entity.player.attack.strong.custom")) {
+            var holder = net.minecraft.core.Holder.direct(net.minecraft.sounds.SoundEvent.createVariableRangeEvent(
+                    net.minecraft.resources.Identifier.parse(key)));
+            preserved.add(new net.minecraft.network.protocol.game.ClientboundSoundPacket(holder,
+                    net.minecraft.sounds.SoundSource.PLAYERS, 1, 64, 2, 1, 1, 3));
+            preserved.add(new net.minecraft.network.protocol.game.ClientboundSoundEntityPacket(holder,
+                    net.minecraft.sounds.SoundSource.PLAYERS, entity, 1, 1, 4));
+        }
+        var view = new java.util.concurrent.atomic.AtomicReference<>(new ClientCollisions.View(true, true));
+        var channel = new EmbeddedChannel();
+        var state = new CollisionTeams<Object>("Alice", "mkb_hitfx", codec.noCollision(null), codec::noCollision);
+        var overlay = new ClientCollisions.Overlay(channel, state, codec,
+                warning -> { throw new IllegalStateException(warning); }, 42, view::get);
+        channel.pipeline().addLast("overlay", overlay);
+        overlay.refresh(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        var allMuted = new ArrayList<Object>(muted);
+        allMuted.add(new net.minecraft.network.protocol.game.ClientboundBundlePacket(muted));
+        for (Object packet : allMuted) {
+            var promise = channel.newPromise();
+            channel.writeAndFlush(packet, promise); channel.runPendingTasks();
+            require(promise.isSuccess() && channel.readOutbound() == null, "Legacy hit effect escaped suppression or left an incomplete promise");
+        }
+        for (var packet : preserved) {
+            channel.writeOutbound(packet);
+            require(channel.readOutbound() == packet && channel.readOutbound() == null, "Legacy effects changed or duplicated a hurt/velocity/animation packet");
+        }
+        var hurt = new net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket(42, 75f);
+        var mixedPackets = new ArrayList<>(preserved);
+        mixedPackets.addAll(0, muted); mixedPackets.add(hurt);
+        var mixed = new net.minecraft.network.protocol.game.ClientboundBundlePacket(mixedPackets);
+        channel.writeOutbound(mixed);
+        var filtered = (net.minecraft.network.protocol.game.ClientboundBundlePacket) channel.readOutbound();
+        var children = new ArrayList<Object>(); filtered.subPackets().forEach(children::add);
+        require(children.size() == preserved.size() + 1 && children.subList(0, preserved.size()).equals(preserved),
+                "Legacy hit feedback changed bundle ordering or duplicated feedback");
+        var fixed = (net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) children.getLast();
+        require(fixed.id() == 42 && fixed.yaw() == 0f && hurt.yaw() == 75f, "Legacy effects broke the fixed local tilt or changed the shared packet");
+        var originalChildren = new ArrayList<Object>(); mixed.subPackets().forEach(originalChildren::add);
+        require(originalChildren.equals(mixedPackets), "Legacy effects changed the shared bundle");
+        // Reloading only this option must neither remove the fixed tilt nor require a rejoin.
+        view.set(new ClientCollisions.View(true, false));
+        for (var packet : muted) {
+            channel.writeOutbound(packet); require(channel.readOutbound() == packet, "Effect opt-out did not restore native feedback");
+        }
+        channel.writeOutbound(hurt);
+        require(((net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) channel.readOutbound()).yaw() == 0,
+                "Effect opt-out unexpectedly disabled the existing classic tilt");
+        // The same inactive snapshot covers modern, excluded players and plugin disable.
+        view.set(new ClientCollisions.View(false, true)); overlay.refresh(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        for (var packet : muted) {
+            channel.writeOutbound(packet); require(channel.readOutbound() == packet, "Modern/excluded viewer lost native hit feedback");
+        }
+        view.set(new ClientCollisions.View(true, true)); overlay.refresh(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        channel.writeOutbound(muted.getFirst());
+        require(channel.readOutbound() == null, "Returning to classic did not restore legacy effects");
+        overlay.remove(); channel.runPendingTasks();
+        while (channel.readOutbound() != null) { }
+        for (var packet : muted) {
+            channel.writeOutbound(packet); require(channel.readOutbound() == packet, "Removing handler did not restore native hit feedback");
+        }
+        channel.finishAndReleaseAll();
+        System.out.println("Native legacy hit effects OK: modern accents/damage particles hidden; hurt, velocity, swing, crit and fishing retained; exact IDs, bundles, reload, modes and removal passed");
     }
 
     private static void verifyHurtAnimation(TeamPacketCodec codec, Object team) throws Exception {

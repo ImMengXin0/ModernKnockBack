@@ -41,6 +41,7 @@ defaults:
     recast-delay-ticks: 2
     horizontal-speed-multiplier: 1.05
     vertical-speed-multiplier: 1.0
+    gravity-multiplier: 1.0
     # 相对钩子首个调度 tick 的位置，不是相对移动中的玩家。
     max-distance: 24.0
     # 约 5 秒自动移除；适用于 PvP，长期钓鱼建议改为 0。

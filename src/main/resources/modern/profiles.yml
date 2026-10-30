@@ -39,6 +39,8 @@ defaults:
     # 钩子归当前区域拥有时即时调整速度，否则在首次实体调度时设置一次。
     horizontal-speed-multiplier: 1.10
     vertical-speed-multiplier: 1.0
+    # 空中下落加速度倍率：1.0 原版，1.5 更快下落，范围 1.0～4.0。
+    gravity-multiplier: 1.0
     # 从钩子首个调度 tick 位置计距；设为 0 可取消额外距离限制。
     max-distance: 24.0
     # 不再因额外的 5 秒寿命限制打断普通钓鱼。

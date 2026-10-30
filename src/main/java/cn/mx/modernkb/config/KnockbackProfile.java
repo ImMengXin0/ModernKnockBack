@@ -33,7 +33,14 @@ public record KnockbackProfile(boolean enabled, double groundHorizontal, double 
                 criticalMultiplier, weakMultiplier, maxHorizontal, maxUpward, maxDownward, rod, Native.defaults());
     }
     public record Rod(boolean enabled, int castTicks, int recastTicks, double horizontalSpeed,
-                      double verticalSpeed, double maxDistance, int lifetimeTicks, double impactStrength) {}
+                      double verticalSpeed, double maxDistance, int lifetimeTicks, double impactStrength,
+                      double gravityMultiplier) {
+        /** Keep existing integrations on native flight unless gravity is explicitly configured. */
+        public Rod(boolean enabled, int castTicks, int recastTicks, double horizontalSpeed,
+                   double verticalSpeed, double maxDistance, int lifetimeTicks, double impactStrength) {
+            this(enabled, castTicks, recastTicks, horizontalSpeed, verticalSpeed, maxDistance, lifetimeTicks, impactStrength, 1);
+        }
+    }
 
     public static KnockbackProfile read(ConfigurationSection yaml) {
         double classicHorizontal = number(yaml, "classic.horizontal", 0.4, 0, 4);
@@ -53,7 +60,8 @@ public record KnockbackProfile(boolean enabled, double groundHorizontal, double 
                 new Rod(bool(yaml,"rod.enabled",true), integer(yaml,"rod.cast-interval-ticks",0,1200),
                         integer(yaml,"rod.recast-delay-ticks",0,1200), number(yaml,"rod.horizontal-speed-multiplier",1,0,4),
                         number(yaml,"rod.vertical-speed-multiplier",1,0,4), number(yaml,"rod.max-distance",0,0,32),
-                        integer(yaml,"rod.max-lifetime-ticks",0,12000), number(yaml,"rod.impact-strength",0,0,2)),
+                        integer(yaml,"rod.max-lifetime-ticks",0,12000), number(yaml,"rod.impact-strength",0,0,2),
+                        number(yaml,"rod.gravity-multiplier",1,1,4)),
                 new Native(bool(yaml,"native.enabled",false),
                         number(yaml,"native.horizontal-retention-ground",0.5,0,1),
                         number(yaml,"native.horizontal-retention-air",0.5,0,1),

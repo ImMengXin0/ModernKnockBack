@@ -405,6 +405,74 @@ public class RodListenerTest {
         verify(scheduler).run(eq(plugin), callback.capture(), isNull());
         return callback.getValue();
     }
+    private AtomicReference<Vector> gravityOnly(double multiplier, CombatMode mode) {
+        settings = new Settings(true, false, true, true, Set.of(), Map.of("default", KnockbackMathTest.profile(
+                "rod.gravity-multiplier", multiplier, "rod.max-distance", 0, "rod.max-lifetime-ticks", 0)), Map.of(), Map.of())
+                .withMode(mode, ClassicSettings.defaults());
+        when(hook.getState()).thenReturn(FishHook.HookState.UNHOOKED);
+        when(hook.hasGravity()).thenReturn(true);
+        AtomicReference<Vector> motion = new AtomicReference<>(new Vector(1, 0.5, -1));
+        when(hook.getVelocity()).thenAnswer(call -> motion.get().clone());
+        doAnswer(call -> { motion.set(((Vector)call.getArgument(0)).clone()); return null; }).when(hook).setVelocity(any());
+        when(scheduler.runAtFixedRate(eq(plugin), any(), any(), eq(1L), eq(1L))).thenReturn(mock(ScheduledTask.class));
+        return motion;
+    }
+    private Consumer<ScheduledTask> repeatingTick() {
+        var callback = org.mockito.ArgumentCaptor.forClass(Consumer.class);
+        verify(scheduler).runAtFixedRate(eq(plugin), callback.capture(), any(), eq(1L), eq(1L));
+        return callback.getValue();
+    }
+    @Test public void gravityOnlyModernFlightSchedulesAndAddsOnlyExtraDownwardAcceleration() {
+        var motion = gravityOnly(1.5, CombatMode.MODERN);
+        listener.accepted(cast());
+        verify(hook, never()).setVelocity(any()); // Initial cast Y is still the native launch velocity.
+        firstTick().accept(mock(ScheduledTask.class));
+        assertEquals(0.485, motion.get().getY(), 1e-12);
+        // Simulate 1.21.11 native gravity and drag before the following scheduled tick.
+        motion.get().setY((motion.get().getY() - 0.03) * 0.92);
+        double nativeY = motion.get().getY();
+        repeatingTick().accept(mock(ScheduledTask.class));
+        assertEquals(nativeY - 0.015, motion.get().getY(), 1e-12);
+        assertEquals(1, motion.get().getX(), 0); assertEquals(-1, motion.get().getZ(), 0);
+        verify(hook, times(2)).setVelocity(any());
+        verify(victim, never()).setVelocity(any()); verify(player, never()).setVelocity(any());
+    }
+    @Test public void defaultGravityLeavesUnlimitedModernFlightOnTheNativeFastPath() {
+        gravityOnly(1, CombatMode.MODERN);
+        listener.accepted(cast());
+        verify(hook, never()).setVelocity(any());
+        verify(scheduler, never()).run(any(), any(), any());
+        verify(scheduler, never()).runAtFixedRate(any(), any(), any(), anyLong(), anyLong());
+    }
+    @Test public void gravitySkipsAttachedWaterGroundNoGravityAndSpentHooks() {
+        gravityOnly(1.5, CombatMode.MODERN);
+        when(hook.hasGravity()).thenReturn(false);
+        listener.accepted(cast()); firstTick().accept(mock(ScheduledTask.class));
+        var tick = repeatingTick(); tick.accept(mock(ScheduledTask.class));
+        when(hook.hasGravity()).thenReturn(true);
+        for (var state : new FishHook.HookState[]{FishHook.HookState.HOOKED_ENTITY, FishHook.HookState.BOBBING}) {
+            when(hook.getState()).thenReturn(state); tick.accept(mock(ScheduledTask.class));
+        }
+        when(hook.getState()).thenReturn(FishHook.HookState.UNHOOKED);
+        when(hook.getHookedEntity()).thenReturn(victim); tick.accept(mock(ScheduledTask.class));
+        when(hook.getHookedEntity()).thenReturn(null);
+        when(hook.isInWater()).thenReturn(true); tick.accept(mock(ScheduledTask.class));
+        when(hook.isInWater()).thenReturn(false);
+        when(hook.isOnGround()).thenReturn(true); tick.accept(mock(ScheduledTask.class));
+        when(hook.isOnGround()).thenReturn(false);
+        assertTrue(ClassicRodContact.claim(hook)); tick.accept(mock(ScheduledTask.class));
+        verify(hook, never()).setVelocity(any());
+    }
+    @Test public void classicGravityUsesTheSameAccelerationAndReloadStopsItsOldTask() {
+        var motion = gravityOnly(2, CombatMode.CLASSIC);
+        listener.accepted(cast()); firstTick().accept(mock(ScheduledTask.class));
+        assertEquals(0.47, motion.get().getY(), 1e-12);
+        var tick = repeatingTick();
+        settings = settings.withMode(CombatMode.MODERN, ClassicSettings.defaults());
+        clearInvocations(hook);
+        var task = mock(ScheduledTask.class); tick.accept(task);
+        verify(task).cancel(); verify(hook, never()).setVelocity(any());
+    }
     private RodCollision sweptRod() {
         settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults());
         RodCollision collision = mock(RodCollision.class);

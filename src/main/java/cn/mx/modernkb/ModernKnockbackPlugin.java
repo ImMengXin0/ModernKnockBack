@@ -144,7 +144,9 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
                         + " ticks | rod interval=" + settings.classic().effectiveRodHitTicks()
                         + " ticks | rod to sword=" + settings.classic().effectiveRodMeleeTicks() + " ticks | velocity protection=" + settings.classic().protectVelocityFromSync()
                         + " | stop_sprint=" + settings.classic().stopSprint() + " | jump reset=" + settings.classic().jumpResetEnabled()
-                        + "/" + settings.classic().jumpResetWindowTicks() + " ticks | targeting=native | rod margin=0.3 | player pushing=off");
+                        + "/" + settings.classic().jumpResetWindowTicks() + " ticks | click density=" + settings.classic().clickDensityEnabled()
+                        + " (max 20%) | legacy hit effects=" + settings.classic().legacyHitEffects()
+                        + " | targeting=native | rod margin=0.3 | player pushing=off");
             } else if (args[0].equalsIgnoreCase("list") && args.length == 1) {
                 sender.sendMessage(String.join(", ", new TreeSet<>(profiles())));
             } else if (args[0].equalsIgnoreCase("view") && args.length == 2) {

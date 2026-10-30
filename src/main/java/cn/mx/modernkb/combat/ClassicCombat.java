@@ -43,6 +43,7 @@ public final class ClassicCombat implements Listener {
         }
     }
     private record Ground(double y, boolean limited) {}
+    private record DensityAttempt(Settings settings, boolean blockedByClassic) {}
     private record RodStamp(Settings settings, int tick, EntityDamageByEntityEvent damage, EntityKnockbackEvent knockback) {}
     private record Pending(Settings settings, int tick, EntityDamageByEntityEvent damage,
                            EntityKnockbackEvent knockback, boolean rod, boolean leafFlush, Object generation) {}
@@ -73,6 +74,8 @@ public final class ClassicCombat implements Listener {
     private final Map<UUID, Hit> hits = new ConcurrentHashMap<>();
     private final Map<UUID, Ground> grounds = new ConcurrentHashMap<>();
     private final ClassicJumpTracker jumps = new ClassicJumpTracker();
+    private final ClassicClickDensity clickDensity = new ClassicClickDensity();
+    private final Map<PrePlayerAttackEntityEvent, DensityAttempt> densityAttempts = new ConcurrentHashMap<>();
     private final Map<UUID, RodStamp> rodHits = new ConcurrentHashMap<>();
     private final Map<UUID, RodScope> activeRods = new ConcurrentHashMap<>();
     private final Map<UUID, Pending> pending = new ConcurrentHashMap<>();
@@ -122,6 +125,7 @@ public final class ClassicCombat implements Listener {
     }
     private void restore(LivingEntity entity) {
         jumps.clear(entity.getUniqueId());
+        clickDensity.clear(entity.getUniqueId());
         if (entity instanceof Player) {
             var speed = entity.getAttribute(Attribute.ATTACK_SPEED);
             if (speed != null && speed.getModifier(speedKey) != null) speed.removeModifier(speedKey);
@@ -138,6 +142,7 @@ public final class ClassicCombat implements Listener {
         managed.remove(entity.getUniqueId(), entity);
     }
     public void refreshAll() {
+        clickDensity.clear(); densityAttempts.clear();
         hits.clear(); pending.clear(); velocityEvents.clear(); prepared.clear(); grounds.clear(); jumps.clear(); rodHits.clear();
         Set<LivingEntity> entities = new HashSet<>(managed.values());
         entities.addAll(Bukkit.getOnlinePlayers());
@@ -166,7 +171,31 @@ public final class ClassicCombat implements Listener {
         if (!config.classicEnabled() || !event.willAttack() || !(event.getAttacked() instanceof LivingEntity victim)
                 || !eligible(victim, config) || players.get(event.getPlayer().getUniqueId()).excluded()) return;
         reconcile(victim);
-        if (blocked(victim, config) || blockedByRod(victim, config)) { event.setCancelled(true); preventedHits.increment(); }
+        boolean blocked = blocked(victim, config) || blockedByRod(victim, config);
+        if (densityEligible(event.getPlayer(), config) && victim != event.getPlayer())
+            densityAttempts.put(event, new DensityAttempt(config, blocked));
+        if (blocked) { event.setCancelled(true); preventedHits.increment(); }
+    }
+    /** Count native attack attempts, including our hurt-window veto; external vetoes grant no sample. */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void attackDensity(PrePlayerAttackEntityEvent event) {
+        DensityAttempt attempt = densityAttempts.remove(event);
+        if (attempt == null || attempt.settings != settings.get()
+                || event.isCancelled() && !attempt.blockedByClassic) return;
+        Player player = event.getPlayer();
+        if (!densityEligible(player, attempt.settings) || !(event.getAttacked() instanceof LivingEntity victim)
+                || !eligible(victim, attempt.settings)) return;
+        clickDensity.record(player.getUniqueId(), player.getTicksLived(), attempt.settings);
+    }
+    private boolean densityEligible(Player player, Settings config) {
+        if (!CombatTracker.owns(player)) return false;
+        boolean allowed = config.classicEnabled() && config.classic().clickDensityEnabled()
+                && !players.get(player.getUniqueId()).excluded() && tracker.kind(player) == CombatantKind.PLAYER
+                && player.isValid() && !player.isDead() && !player.isFlying() && !player.isGliding()
+                && !player.isInsideVehicle() && !player.isSwimming()
+                && player.getGameMode() != org.bukkit.GameMode.CREATIVE && player.getGameMode() != org.bukkit.GameMode.SPECTATOR;
+        if (!allowed) clickDensity.clear(player.getUniqueId());
+        return allowed;
     }
     private boolean meleeDamage(EntityDamageByEntityEvent event) {
         return event.getCause() == EntityDamageEvent.DamageCause.ENTITY_ATTACK
@@ -268,7 +297,10 @@ public final class ClassicCombat implements Listener {
         boolean limited = context.type().melee() && profile.classic().yLimit() && heightLimited(victim, profile);
         boolean jumpReset = config.classic().jumpResetEnabled() && context.type().melee()
                 && isJumpReset(victim, context, before, config.classic().jumpResetWindowTicks());
-        Vector impulse = ClassicKnockbackMath.impulse(before, context, profile, attack, resistance == null ? 0 : resistance.getValue(), limited, jumpReset);
+        double densityReduction = context.type().melee() && victim instanceof Player player && densityEligible(player, config)
+                ? clickDensity.reduction(id, now, config) : 0;
+        Vector impulse = ClassicKnockbackMath.impulse(before, context, profile, attack,
+                resistance == null ? 0 : resistance.getValue(), limited, jumpReset, densityReduction);
         Hit accepted = hit;
         ClassicKnockbackMath.Attack captured = attack;
         return new Calculation(impulse, () -> {
@@ -577,11 +609,12 @@ public final class ClassicCombat implements Listener {
         UUID id = event.getEntity().getUniqueId();
         clear(id); managed.remove(id);
     }
-    private void clear(UUID id) { hits.remove(id); pending.remove(id); grounds.remove(id); jumps.clear(id); rodHits.remove(id); }
+    private void clear(UUID id) { hits.remove(id); pending.remove(id); grounds.remove(id); jumps.clear(id); clickDensity.clear(id); rodHits.remove(id); }
     public long preventedHits() { return preventedHits.sum(); }
     public long preventedComponents() { return preventedComponents.sum(); }
     public long applied() { return applied.sum(); }
     public void close() {
+        clickDensity.clear(); densityAttempts.clear();
         // Paper owns all entities here. Folia disallows scheduling new plugin tasks during disable;
         // persistent immunity markers are recovered on the next enable/join, modifiers are transient.
         for (LivingEntity entity : new ArrayList<>(managed.values())) if (CombatTracker.owns(entity)) restore(entity);

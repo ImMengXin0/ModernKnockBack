@@ -16,6 +16,8 @@ import org.bukkit.event.entity.ProjectileHitEvent;
 import org.bukkit.plugin.Plugin;
 
 public final class RodListener implements Listener {
+    // FishingHook.tick in 1.21.11 subtracts 0.03 from Y before native movement and drag.
+    private static final double NATIVE_GRAVITY = 0.03;
     private record Times(Integer cast, Integer reel) {}
     private final Plugin plugin;
     private final Supplier<Settings> settings;
@@ -129,7 +131,8 @@ public final class RodListener implements Listener {
             FishHook hook = event.getHook();
             Settings snapshot = settings.get();
             hooks.add(hook);
-            if (!snapshot.classicEnabled() && rod.horizontalSpeed() == 1 && rod.verticalSpeed() == 1 && rod.maxDistance() == 0 && rod.lifetimeTicks() == 0) return;
+            if (!snapshot.classicEnabled() && rod.horizontalSpeed() == 1 && rod.verticalSpeed() == 1
+                    && rod.gravityMultiplier() == 1 && rod.maxDistance() == 0 && rod.lifetimeTicks() == 0) return;
             // The hook is not yet valid/spawned here. Ownership, not validity, allows safe launch tuning.
             boolean launched = CombatTracker.owns(hook);
             if (launched) launch(hook, rod);
@@ -137,6 +140,7 @@ public final class RodListener implements Listener {
                 if (hook.isValid() && plugin.isEnabled() && settings.get() != snapshot) removeOwnedHook(hook);
                 else if (!event.isCancelled() && hook.isValid() && plugin.isEnabled() && snapshot.enabled()) {
                     if (!launched) launch(hook, rod);
+                    accelerateFall(hook, rod);
                     sweep(hook, snapshot);
                     if (!hook.isValid()) return;
                     start(hook, rod, snapshot);
@@ -159,7 +163,7 @@ public final class RodListener implements Listener {
         }
     }
     private void start(FishHook hook, KnockbackProfile.Rod rod, Settings snapshot) {
-        if (!snapshot.classicEnabled() && rod.maxDistance() == 0 && rod.lifetimeTicks() == 0) return;
+        if (!snapshot.classicEnabled() && rod.gravityMultiplier() == 1 && rod.maxDistance() == 0 && rod.lifetimeTicks() == 0) return;
         var origin = hook.getLocation();
         int born = hook.getTicksLived();
         ScheduledTask[] holder = new ScheduledTask[1];
@@ -172,11 +176,22 @@ public final class RodListener implements Listener {
             boolean outside = rod.maxDistance() > 0 && (!origin.getWorld().equals(location.getWorld())
                     || origin.distanceSquared(location) > rod.maxDistance() * rod.maxDistance());
             if (expired || outside) { removeOwnedHook(hook); scheduled.cancel(); tasks.remove(scheduled); return; }
+            accelerateFall(hook, rod);
             sweep(hook, snapshot);
             if (!hook.isValid()) { scheduled.cancel(); tasks.remove(scheduled); hooks.remove(hook); }
         }, () -> { if (holder[0] != null) tasks.remove(holder[0]); hooks.remove(hook); }, 1, 1);
         holder[0] = task;
         if (task != null && !task.isCancelled()) tasks.add(task);
+    }
+    private void accelerateFall(FishHook hook, KnockbackProfile.Rod rod) {
+        if (rod.gravityMultiplier() == 1 || !CombatTracker.owns(hook) || !hook.isValid() || !hook.hasGravity()
+                || hook.getState() != FishHook.HookState.UNHOOKED || hook.getHookedEntity() != null
+                || hook.isOnGround() || hook.isInWater() || ClassicRodContact.spent(hook)) return;
+        var velocity = hook.getVelocity().clone();
+        if (!cn.mx.modernkb.combat.KnockbackMath.finite(velocity)) return;
+        // Add only the extra acceleration; native tick still supplies gravity and drag once.
+        velocity.setY(velocity.getY() - NATIVE_GRAVITY * (rod.gravityMultiplier() - 1));
+        hook.setVelocity(velocity);
     }
     private void sweep(FishHook hook, Settings snapshot) {
         if (!snapshot.classicEnabled() || !CombatTracker.owns(hook) || !hook.isValid()

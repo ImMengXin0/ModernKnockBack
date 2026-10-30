@@ -30,7 +30,7 @@ final class TeamPacketCodec {
     private final Method collision = team.getMethod("setCollisionRule", Class.forName("net.minecraft.world.scores.Team$CollisionRule"));
     private final Object never = collision.getParameterTypes()[0].getField("NEVER").get(null);
     private final List<Method[]> copies = new ArrayList<>();
-    private final SweepEffectFilter sweepEffects = new SweepEffectFilter();
+    private final ClassicEffectFilter effects = new ClassicEffectFilter();
     private final HurtAnimationFilter hurtAnimation = new HurtAnimationFilter();
 
     TeamPacketCodec() throws ReflectiveOperationException {
@@ -78,10 +78,15 @@ final class TeamPacketCodec {
         return transform(value, state, hideSweep, -1);
     }
     List<Object> transform(Object value, CollisionTeams<Object> state, boolean classic, int selfEntityId) throws ReflectiveOperationException {
-        if (classic && sweepEffects.matches(value)) return List.of();
+        return transform(value, state, classic, selfEntityId, true);
+    }
+    List<Object> transform(Object value, CollisionTeams<Object> state, boolean classic, int selfEntityId,
+                           boolean legacyHitEffects) throws ReflectiveOperationException {
+        if (classic && effects.matches(value, legacyHitEffects)) return List.of();
         if (bundle.isInstance(value)) {
             var output = new ArrayList<Object>();
-            for (Object child : (Iterable<?>) children.invoke(value)) output.addAll(transform(child, state, classic, selfEntityId));
+            for (Object child : (Iterable<?>) children.invoke(value))
+                output.addAll(transform(child, state, classic, selfEntityId, legacyHitEffects));
             if (classic && output.isEmpty()) return List.of();
             return List.of(bundleConstructor.newInstance(output));
         }
