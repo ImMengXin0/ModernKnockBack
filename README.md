@@ -1,4 +1,4 @@
-# ModernKnockBack 2.2.0
+# ModernKnockBack 2.3.0
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -28,7 +28,9 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.2.0.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.3.0.jar`。
+
+2.3.0 新增 classic 的 1.8 斧头基础伤害适配。`legacy-axe-damage: true` 默认开启并自动补全；标准玩家基础属性下，木/金、石、铁、钻石斧的基础总伤害为 4、5、6、7 点。通过临时属性修正交给原生流程计算后续伤害，支持切换武器及切回 modern 时恢复。完整变更和升级方法见 [2.3.0 发布说明](docs/RELEASE-2.3.0.md)。
 
 2.2.0 基于原始 2.0.5，整合 jump reset 反向动量限制、CPS 密度、鱼钩重力倍率和旧版命中反馈。`legacy-hit-effects` 默认开启并自动补全，减少现代额外粒子和音效，保留受击变红、受伤声、挥手及暴击/附魔粒子。它不替换客户端模型或第一人称持刀动画，完整旧版客户端动画仍需客户端支持。完整变更和升级方法见 [2.2.0 发布说明](docs/RELEASE-2.2.0.md)。
 

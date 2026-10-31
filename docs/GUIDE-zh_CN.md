@@ -1,13 +1,13 @@
 # ModernKnockBack 1.21.11 使用与接口
 
-当前版本 2.2.0，在原始 2.0.5 基础上保留 jump reset 反向动量上限、[CPS 密度](CLICK-DENSITY.md)和鱼钩空中重力倍率，新增 `classic/combat.yml` 的 `legacy-hit-effects: true`。默认隐藏现代伤害指示粒子及攻击附加音效，保留受击变红、受伤声、挥手和暴击/附魔粒子；开关自动补全，可重载，详见 [视角、命中反馈、鱼钩与同步](CLASSIC-FEEL.md)。客户端模型及持刀动画并未替换。
+当前版本 2.3.0，新增 `classic/combat.yml` 的 `legacy-axe-damage: true`，使标准木/金、石、铁、钻石斧的基础总伤害按 1.8 的 4、5、6、7 点计算；升级自动补全，详见 [2.3.0 发布说明](RELEASE-2.3.0.md)。继续保留 jump reset 反向动量上限、[CPS 密度](CLICK-DENSITY.md)、鱼钩空中重力倍率和旧版命中反馈。`legacy-hit-effects: true` 隐藏现代伤害指示粒子及攻击附加音效，保留受击变红、受伤声、挥手和暴击/附魔粒子；详见 [视角、命中反馈、鱼钩与同步](CLASSIC-FEEL.md)。客户端模型及持刀动画并未替换。
 
 classic 保留固定受击倾斜、Leaf 立即同步第二次速度事件保护及鱼钩原生附着。被钩玩家看不到挡脸鱼钩；每枚钩只触发一次受击，右键收杆不拉回，连续杆及竿接刀默认保护10 tick。普通近战保持原生3.0格距离、贴身暴击方向修复，鱼钩保持0.3格碰撞余量。源码依据见 [鱼竿修复](CLASSIC-ROD-STACK.md)，技巧复测见 [Classic 技巧与延迟](CLASSIC-TECHNIQUES.md)，配置规则见 [配置补全](CONFIG-COMPLETION.md)和 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
 
 ## 安装
 
 1. 使用 Java 21 或更高版本，服务器版本必须为 Minecraft 1.21.11。
-2. 把 `ModernKnockBack-2.2.0.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
+2. 把 `ModernKnockBack-2.3.0.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
 3. 启动后检查 `/mkb status`，编辑当前模式目录 `plugins/ModernKnockBack/modern/` 或 `classic/` 内的配置，用 `/mkb reload` 重载，用 `/kbtest classic` 或 `/kbtest modern` 切换。
 4. 配置错误会拒绝应用，并保留当前已加载配置。启动时配置损坏会明确报错、停止启用，不会生成一份默认配置覆盖损坏文件。
 
