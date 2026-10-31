@@ -309,6 +309,74 @@ public class ClassicCombatTest {
         }
         assertEquals(4, classic.applied());
     }
+    private Map<NamespacedKey, AttributeModifier> axeAttributes() {
+        AttributeInstance damage = mock(AttributeInstance.class);
+        when(victim.getAttribute(Attribute.ATTACK_DAMAGE)).thenReturn(damage);
+        Map<NamespacedKey, AttributeModifier> values = new HashMap<>();
+        when(damage.getModifier(any(net.kyori.adventure.key.Key.class))).thenAnswer(call -> values.get(call.getArgument(0)));
+        doAnswer(call -> { AttributeModifier value = call.getArgument(0); values.put(value.getKey(), value); return null; })
+                .when(damage).addTransientModifier(any());
+        doAnswer(call -> { values.remove(call.getArgument(0)); return null; })
+                .when(damage).removeModifier(any(net.kyori.adventure.key.Key.class));
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        when(victim.getInventory()).thenReturn(inventory);
+        return values;
+    }
+    private org.bukkit.inventory.ItemStack axe(org.bukkit.Material material) {
+        var item = mock(org.bukkit.inventory.ItemStack.class);
+        when(item.getType()).thenReturn(material);
+        when(victim.getInventory().getItemInMainHand()).thenReturn(item);
+        return item;
+    }
+    @Test public void classicAxesHave18BaseDamageAndNeverStackOrOverwriteOtherModifiers() {
+        var values = axeAttributes();
+        var foreignKey = new NamespacedKey("other", "strength");
+        values.put(foreignKey, new AttributeModifier(foreignKey, 3, AttributeModifier.Operation.ADD_NUMBER));
+        var materials = new org.bukkit.Material[]{org.bukkit.Material.WOODEN_AXE, org.bukkit.Material.GOLDEN_AXE,
+                org.bukkit.Material.STONE_AXE, org.bukkit.Material.IRON_AXE, org.bukkit.Material.DIAMOND_AXE};
+        double[] modern = {7, 7, 9, 9, 9}, legacy = {4, 4, 5, 6, 7};
+        var key = new NamespacedKey(plugin, "classic_axe_damage");
+        for (int i = 0; i < materials.length; i++) {
+            axe(materials[i]); classic.reconcile(victim); classic.reconcile(victim);
+            assertEquals(legacy[i], modern[i] + values.get(key).getAmount(), 0);
+            assertEquals(AttributeModifier.Operation.ADD_NUMBER, values.get(key).getOperation());
+            assertEquals(2, values.size());
+            assertEquals(3, values.get(foreignKey).getAmount(), 0);
+        }
+        verify(victim.getAttribute(Attribute.ATTACK_DAMAGE), never()).setBaseValue(anyDouble());
+    }
+    @Test public void switchingItemsModernExclusionAndDisableRestoreAxeDamage() {
+        var values = axeAttributes();
+        axe(org.bukkit.Material.DIAMOND_AXE); classic.reconcile(victim);
+        assertEquals(1, values.size());
+        var sword = axe(org.bukkit.Material.DIAMOND_SWORD);
+        when(victim.getInventory().getItem(2)).thenReturn(sword);
+        classic.held(new org.bukkit.event.player.PlayerItemHeldEvent(victim, 0, 2));
+        assertTrue(values.isEmpty());
+        axe(org.bukkit.Material.IRON_AXE); classic.reconcile(victim);
+        settings = settings.withMode(CombatMode.MODERN, ClassicSettings.defaults()); classic.reconcile(victim);
+        assertTrue(values.isEmpty());
+        settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults()); classic.reconcile(victim);
+        store.excluded(victim.getUniqueId(), true); classic.reconcile(victim);
+        assertTrue(values.isEmpty());
+        store.excluded(victim.getUniqueId(), false); classic.reconcile(victim);
+        classic.close(); assertTrue(values.isEmpty());
+    }
+    @Test public void customWeaponAttributesAndPost18AxesKeepTheirOwnDamage() {
+        var values = axeAttributes();
+        var item = axe(org.bukkit.Material.DIAMOND_AXE);
+        var meta = mock(org.bukkit.inventory.meta.ItemMeta.class);
+        when(item.getItemMeta()).thenReturn(meta);
+        when(meta.getAttributeModifiers(Attribute.ATTACK_DAMAGE)).thenReturn(List.of(
+                new AttributeModifier(new NamespacedKey("custom", "weapon"), 15, AttributeModifier.Operation.ADD_NUMBER)));
+        classic.reconcile(victim); assertTrue(values.isEmpty());
+        axe(org.bukkit.Material.NETHERITE_AXE); classic.reconcile(victim); assertTrue(values.isEmpty());
+        axe(org.bukkit.Material.COPPER_AXE); classic.reconcile(victim); assertTrue(values.isEmpty());
+        axe(org.bukkit.Material.WOODEN_AXE); classic.reconcile(victim); assertEquals(1, values.size());
+        settings = settings.withMode(CombatMode.CLASSIC,
+                new ClassicSettings(10, 10, true, true, false, true, 2, 10, true, true, false));
+        classic.reconcile(victim); assertTrue(values.isEmpty());
+    }
     @Test public void switchBackRestoresOriginalImmunityAndRemovesOnlyOwnedModifier() {
         classic.reconcile(victim); classic.reconcile(victim);
         assertEquals(20, immunity.get()); assertEquals(1, modifiers.size());

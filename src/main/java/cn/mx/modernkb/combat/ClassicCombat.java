@@ -69,7 +69,7 @@ public final class ClassicCombat implements Listener {
     private final PlayerStore players;
     private final CombatTracker tracker;
     private final RodVelocity rodVelocity;
-    private final NamespacedKey speedKey, savedImmunityKey, appliedImmunityKey;
+    private final NamespacedKey speedKey, axeKey, savedImmunityKey, appliedImmunityKey;
     private final Map<UUID, LivingEntity> managed = new ConcurrentHashMap<>();
     private final Map<UUID, Hit> hits = new ConcurrentHashMap<>();
     private final Map<UUID, Ground> grounds = new ConcurrentHashMap<>();
@@ -91,6 +91,7 @@ public final class ClassicCombat implements Listener {
         this.plugin = plugin; this.settings = settings; this.players = players; this.tracker = tracker;
         this.rodVelocity = rodVelocity;
         speedKey = new NamespacedKey(plugin, "classic_attack_speed");
+        axeKey = new NamespacedKey(plugin, "classic_axe_damage");
         savedImmunityKey = new NamespacedKey(plugin, "classic_previous_immunity");
         appliedImmunityKey = new NamespacedKey(plugin, "classic_applied_immunity");
     }
@@ -106,7 +107,9 @@ public final class ClassicCombat implements Listener {
         if (!config.classicEnabled() || !eligible(entity, config)) { restore(entity); return; }
         managed.put(entity.getUniqueId(), entity);
         var data = entity.getPersistentDataContainer();
-        if (entity instanceof Player) {
+        if (entity instanceof Player player) {
+            reconcileAxe(player, config.classic().legacyAxeDamage() && player.getInventory() != null
+                    ? player.getInventory().getItemInMainHand() : null);
             var speed = entity.getAttribute(Attribute.ATTACK_SPEED);
             if (speed != null && speed.getModifier(speedKey) == null)
                 speed.addTransientModifier(new AttributeModifier(speedKey, ATTACK_SPEED_BONUS, AttributeModifier.Operation.ADD_NUMBER));
@@ -123,10 +126,58 @@ public final class ClassicCombat implements Listener {
             if (remaining <= oldDuration && remaining > duration) entity.setNoDamageTicks(duration);
         }
     }
+    /** Change the base attribute before vanilla computes criticals, enchantments and armor. */
+    private void reconcileAxe(Player player, org.bukkit.inventory.ItemStack item) {
+        var damage = player.getAttribute(Attribute.ATTACK_DAMAGE);
+        if (damage == null) return;
+        double adjustment = 0;
+        if (item != null) {
+            var meta = item.getItemMeta();
+            // Explicit custom weapon attributes belong to their supplying plugin.
+            if (meta == null || meta.getAttributeModifiers(Attribute.ATTACK_DAMAGE) == null)
+                adjustment = switch (item.getType()) {
+                    case WOODEN_AXE, GOLDEN_AXE, IRON_AXE -> -3;
+                    case STONE_AXE -> -4;
+                    case DIAMOND_AXE -> -2;
+                    default -> 0; // Copper/netherite did not exist in 1.8.
+                };
+        }
+        var previous = damage.getModifier(axeKey);
+        if (previous != null && previous.getAmount() == adjustment) return;
+        if (previous != null) damage.removeModifier(axeKey);
+        if (adjustment != 0) damage.addTransientModifier(
+                new AttributeModifier(axeKey, adjustment, AttributeModifier.Operation.ADD_NUMBER));
+    }
+
+    private void refreshEquipment(Player player) {
+        player.getScheduler().run(plugin, task -> reconcile(player), null);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void held(PlayerItemHeldEvent event) {
+        Player player = event.getPlayer();
+        Settings config = settings.get();
+        if (config.classicEnabled() && eligible(player, config))
+            reconcileAxe(player, config.classic().legacyAxeDamage() ? player.getInventory().getItem(event.getNewSlot()) : null);
+        else reconcileAxe(player, null);
+    }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void swap(PlayerSwapHandItemsEvent event) { refreshEquipment(event.getPlayer()); }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void drop(PlayerDropItemEvent event) { refreshEquipment(event.getPlayer()); }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void inventory(org.bukkit.event.inventory.InventoryClickEvent event) {
+        if (event.getWhoClicked() instanceof Player player) refreshEquipment(player);
+    }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void drag(org.bukkit.event.inventory.InventoryDragEvent event) {
+        if (event.getWhoClicked() instanceof Player player) refreshEquipment(player);
+    }
     private void restore(LivingEntity entity) {
         jumps.clear(entity.getUniqueId());
         clickDensity.clear(entity.getUniqueId());
-        if (entity instanceof Player) {
+        if (entity instanceof Player player) {
+            reconcileAxe(player, null);
             var speed = entity.getAttribute(Attribute.ATTACK_SPEED);
             if (speed != null && speed.getModifier(speedKey) != null) speed.removeModifier(speedKey);
         }

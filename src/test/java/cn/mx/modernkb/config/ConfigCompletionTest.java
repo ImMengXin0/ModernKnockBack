@@ -89,6 +89,19 @@ public class ConfigCompletionTest {
         String once = Files.readString(profiles); files.load(CombatMode.CLASSIC);
         assertEquals(once, Files.readString(profiles)); assertEquals(3, backups().size());
     }
+    @Test public void legacyAxeSettingIsCompletedAndExplicitFalseSurvivesRestart() throws Exception {
+        Path combat = root.resolve("classic/combat.yml");
+        Files.writeString(combat, "# old combat config\nhit-interval-ticks: 12\n");
+        assertTrue(files.load(CombatMode.CLASSIC).classic().legacyAxeDamage());
+        var completed = YamlFiles.load(combat);
+        assertTrue(completed.getBoolean("legacy-axe-damage"));
+        assertEquals(12, completed.getInt("hit-interval-ticks"));
+        completed.set("legacy-axe-damage", false);
+        YamlFiles.save(combat, completed);
+        ModeFiles restarted = new ModeFiles(root); restarted.initialize();
+        assertFalse(restarted.load(CombatMode.CLASSIC).classic().legacyAxeDamage());
+        assertFalse(YamlFiles.load(combat).getBoolean("legacy-axe-damage"));
+    }
     @Test public void missingRodStrengthAndProfilesArePersistedAndLoadedOnRestart() throws Exception {
         Path profiles = root.resolve("classic/profiles.yml");
         Files.writeString(profiles, "defaults:\n  classic:\n    horizontal: 0.5274\nprofiles:\n  default: {}\n  fishing_rod:\n    rod:\n      cast-interval-ticks: 0\n      horizontal-speed-multiplier: 1.2\n");

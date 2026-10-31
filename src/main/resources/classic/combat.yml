@@ -34,3 +34,8 @@ jump-reset-window-ticks: 2
 # 受击时只使用已经收到的点击，不追溯修改旧 KB；与 jump reset 共用 25% 实际推力下限。
 # 不缩短受击间隔、不增加伤害或对方 KB，不重复发送速度；新项会自动补全。
 click-density-enabled: true
+
+# 1.8 斧头基础总伤害（含玩家基础 1 点）：木/金 4、石 5、铁 6、钻石 7。
+# 仅 classic 生效；保留暴击、力量、附魔和护甲计算，不改写物品。
+# 铜/下界合金斧及显式自定义攻击属性的物品保留原值。
+legacy-axe-damage: true

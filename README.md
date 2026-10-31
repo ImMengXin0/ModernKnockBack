@@ -7,6 +7,7 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 - `/kbtest classic|modern` 切换经典无蓄力攻击/旧版向量与现代战斗，保存模式并在重启后继续使用。
 - `classic/` 和 `modern/` 独立配置目录，升级自动迁移已有现代配置。
 - 启动、切换模式及重载时自动补全当前模式缺失配置；保留已配置数值、旧字段与自定义 profile，修改前自动备份。
+- classic 的 `classic/combat.yml` 新增 `legacy-axe-damage: true`（升级自动补全）：木/金、石、铁、钻石斧按 1.8 基础总伤害 4、5、6、7 计算，暴击、力量、附魔及护甲仍由原版计算。切换武器、modern 模式、排除玩家及停用时恢复；铜/下界合金斧与显式自定义攻击属性的物品保留原值。
 - classic 默认只列出 5 个主要 KB 参数；相同命中状态覆盖旧动量，疾跑推力统一方向，关闭默认高度锁定。
 - classic 默认 `stop_sprint: false`，按旧 KnockbackManager 的客户端疾跑状态计算 KB；攻击重置不会消耗下一刀的疾跑附加，真实停止/重新开启疾跑及 jump reset 仍生效。
 - classic jump reset 的反向动量最多抵消本次实际水平推力的 75%，避免将击退完全抵消；侧向走位与正常跳跃收益保留，无需新增配置。

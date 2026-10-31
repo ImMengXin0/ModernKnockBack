@@ -7,7 +7,15 @@ import java.util.Set;
 public record ClassicSettings(int hitIntervalTicks, int rodHitIntervalTicks, boolean disableSweep,
                               boolean protectVelocityFromSync, boolean resetSprintOnHit,
                               boolean jumpResetEnabled, int jumpResetWindowTicks, int rodMeleeIntervalTicks,
-                              boolean clickDensityEnabled, boolean legacyHitEffects) {
+                              boolean clickDensityEnabled, boolean legacyHitEffects, boolean legacyAxeDamage) {
+    /** Compatibility constructor for integrations using the 2.2.0 settings shape. */
+    public ClassicSettings(int hitIntervalTicks, int rodHitIntervalTicks, boolean disableSweep,
+                           boolean protectVelocityFromSync, boolean resetSprintOnHit,
+                           boolean jumpResetEnabled, int jumpResetWindowTicks, int rodMeleeIntervalTicks,
+                           boolean clickDensityEnabled, boolean legacyHitEffects) {
+        this(hitIntervalTicks, rodHitIntervalTicks, disableSweep, protectVelocityFromSync, resetSprintOnHit,
+                jumpResetEnabled, jumpResetWindowTicks, rodMeleeIntervalTicks, clickDensityEnabled, legacyHitEffects, true);
+    }
     /** Compatibility constructor for integrations using the CPS-density settings shape. */
     public ClassicSettings(int hitIntervalTicks, int rodHitIntervalTicks, boolean disableSweep,
                            boolean protectVelocityFromSync, boolean resetSprintOnHit,
@@ -49,7 +57,7 @@ public record ClassicSettings(int hitIntervalTicks, int rodHitIntervalTicks, boo
     static ClassicSettings read(org.bukkit.configuration.file.YamlConfiguration yaml) {
         Set<String> allowed = Set.of("hit-interval-ticks", "rod-hit-interval-ticks", "disable-sweep", "protect-velocity-from-sync",
                 "stop_sprint", "reset-sprint-on-hit", "jump-reset-enabled", "jump-reset-window-ticks", "rod-melee-interval-ticks",
-                "click-density-enabled", "legacy-hit-effects");
+                "click-density-enabled", "legacy-hit-effects", "legacy-axe-damage");
         for (String key : yaml.getKeys(false)) if (!allowed.contains(key)) throw new IllegalArgumentException("Unknown classic combat field: " + key);
         boolean stopSprint = KnockbackProfile.bool(yaml, "stop_sprint", false);
         boolean legacyReset = KnockbackProfile.bool(yaml, "reset-sprint-on-hit", false);
@@ -63,7 +71,8 @@ public record ClassicSettings(int hitIntervalTicks, int rodHitIntervalTicks, boo
                 ticks(yaml.get("jump-reset-window-ticks"), 2, "jump-reset-window-ticks"),
                 ticks(yaml.get("rod-melee-interval-ticks"), 10, "rod-melee-interval-ticks"),
                 KnockbackProfile.bool(yaml, "click-density-enabled", true),
-                KnockbackProfile.bool(yaml, "legacy-hit-effects", true));
+                KnockbackProfile.bool(yaml, "legacy-hit-effects", true),
+                KnockbackProfile.bool(yaml, "legacy-axe-damage", true));
     }
     private static int ticks(Object raw, int fallback, String key) {
         if (raw == null) return fallback;
