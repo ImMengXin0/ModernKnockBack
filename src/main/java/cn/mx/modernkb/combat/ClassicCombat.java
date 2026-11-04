@@ -8,6 +8,8 @@ import cn.mx.modernkb.rod.ClassicRodContact;
 import com.destroystokyo.paper.event.player.PlayerJumpEvent;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.event.entity.EntityPushedByEntityAttackEvent;
+import io.papermc.paper.event.entity.EntityEquipmentChangedEvent;
+import io.papermc.paper.event.player.PlayerInventorySlotChangeEvent;
 import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.util.*;
@@ -165,11 +167,12 @@ public final class ClassicCombat implements Listener {
                 : config.classic().hitIntervalTicks() * 2, modernHit);
     }
     private void reconcileWeapon(Player player, org.bukkit.inventory.ItemStack item, Settings config) {
-        boolean modern = item != null && config.modernItem(item.getType().name());
-        reconcileAxe(player, !modern && config.classic().legacyAxeDamage() ? item : null);
+        boolean classic = config.classicEnabled() && eligible(player, config);
+        boolean modern = classic && item != null && config.modernItem(item.getType().name());
+        reconcileAxe(player, classic && !modern && config.classic().legacyAxeDamage() ? item : null);
         var speed = player.getAttribute(Attribute.ATTACK_SPEED);
         if (speed == null) return;
-        if (modern) {
+        if (!classic || modern) {
             if (speed.getModifier(speedKey) != null) speed.removeModifier(speedKey);
             clickDensity.clear(player.getUniqueId());
         } else if (speed.getModifier(speedKey) == null)
@@ -200,6 +203,10 @@ public final class ClassicCombat implements Listener {
     private boolean modernDamage(EntityDamageByEntityEvent event, Settings config) {
         Entity source = event.getDamageSource().getDirectEntity();
         return meleeDamage(event) && modernWeapon(source == null ? event.getDamager() : source, config);
+    }
+    private void reconcileEquipment(Player player, org.bukkit.inventory.ItemStack item) {
+        if (!CombatTracker.owns(player)) return;
+        reconcileWeapon(player, item, settings.get());
     }
     /** Change the base attribute before vanilla computes criticals, enchantments and armor. */
     private void reconcileAxe(Player player, org.bukkit.inventory.ItemStack item) {
@@ -234,13 +241,31 @@ public final class ClassicCombat implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void held(PlayerItemHeldEvent event) {
         Player player = event.getPlayer();
-        Settings config = settings.get();
-        if (config.classicEnabled() && eligible(player, config))
-            reconcileWeapon(player, player.getInventory().getItem(event.getNewSlot()), config);
-        else reconcileAxe(player, null);
+        if (!CombatTracker.owns(player)) return;
+        // The selected slot has not changed yet. Reconcile the destination synchronously,
+        // before the next jab/lunge can sample the previous weapon's attack speed.
+        reconcileEquipment(player, player.getInventory().getItem(event.getNewSlot()));
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void swap(PlayerSwapHandItemsEvent event) { refreshEquipment(event.getPlayer()); }
+    public void swap(PlayerSwapHandItemsEvent event) {
+        if (!CombatTracker.owns(event.getPlayer())) return;
+        reconcileEquipment(event.getPlayer(), event.getMainHandItem());
+        refreshEquipment(event.getPlayer());
+    }
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void equipment(EntityEquipmentChangedEvent event) {
+        if (event.getEntity() instanceof Player player
+                && CombatTracker.owns(player)
+                && event.getEquipmentChanges().containsKey(org.bukkit.inventory.EquipmentSlot.HAND))
+            reconcileEquipment(player, player.getInventory().getItemInMainHand());
+    }
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void slotChanged(PlayerInventorySlotChangeEvent event) {
+        // Read the actual hand, not a raw container slot. This also covers shop/plugin replacements.
+        Player player = event.getPlayer();
+        if (!CombatTracker.owns(player)) return;
+        reconcileEquipment(player, player.getInventory().getItemInMainHand());
+    }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void drop(PlayerDropItemEvent event) { refreshEquipment(event.getPlayer()); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

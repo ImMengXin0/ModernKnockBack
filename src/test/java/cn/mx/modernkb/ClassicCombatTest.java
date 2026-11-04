@@ -1050,6 +1050,187 @@ public class ClassicCombatTest {
         classic.reconcile(victim); store.excluded(victim.getUniqueId(), true); classic.reconcile(victim);
         assertTrue(modifiers.isEmpty()); assertEquals(18, immunity.get());
     }
+    private org.bukkit.inventory.ItemStack weapon(Material material) {
+        var item = mock(org.bukkit.inventory.ItemStack.class);
+        when(item.getType()).thenReturn(material);
+        return item;
+    }
+    @Test public void everySpearKeepsNativeCooldownWhileSwordKeepsClassicSpeed() {
+        enableModernItems(Arrays.stream(Material.values()).map(Enum::name).filter(name -> name.endsWith("_SPEAR")).toArray(String[]::new));
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        when(victim.getInventory()).thenReturn(inventory);
+        var key = new NamespacedKey(plugin, "classic_attack_speed");
+        int tested = 0;
+        for (Material material : Material.values()) {
+            if (!material.name().endsWith("_SPEAR")) continue;
+            var sword = weapon(Material.IRON_SWORD);
+            var spear = weapon(material);
+            when(inventory.getItemInMainHand()).thenReturn(sword);
+            classic.reconcile(victim);
+            assertEquals(1024, modifiers.get(key).getAmount(), 0);
+            when(inventory.getItemInMainHand()).thenReturn(spear);
+            classic.reconcile(victim);
+            assertFalse(material + " must not receive the classic speed bonus", modifiers.containsKey(key));
+            tested++;
+        }
+        assertEquals(7, tested);
+        verify(speed, never()).setBaseValue(anyDouble());
+    }
+    @Test public void hotbarSelectionUsesDestinationBeforeInventoryChanges() {
+        enableModernItems("IRON_SPEAR");
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var sword = weapon(Material.IRON_SWORD); var spear = weapon(Material.IRON_SPEAR);
+        when(victim.getInventory()).thenReturn(inventory);
+        when(inventory.getItemInMainHand()).thenReturn(sword);
+        when(inventory.getItem(0)).thenReturn(sword); when(inventory.getItem(1)).thenReturn(spear);
+        classic.reconcile(victim);
+        classic.held(new org.bukkit.event.player.PlayerItemHeldEvent(victim, 0, 1));
+        assertTrue(modifiers.isEmpty());
+        // Even before the deferred refresh, changing back restores the sword's classic speed.
+        when(inventory.getItemInMainHand()).thenReturn(spear);
+        classic.held(new org.bukkit.event.player.PlayerItemHeldEvent(victim, 1, 0));
+        assertEquals(1, modifiers.size());
+        verify(victim.getScheduler(), never()).run(any(), any(), any());
+    }
+    @Test public void offhandSwapUsesProspectiveMainHandWithoutWaitingATick() {
+        enableModernItems("NETHERITE_SPEAR");
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var sword = weapon(Material.IRON_SWORD); var spear = weapon(Material.NETHERITE_SPEAR);
+        when(victim.getInventory()).thenReturn(inventory);
+        when(inventory.getItemInMainHand()).thenReturn(sword);
+        classic.reconcile(victim);
+        classic.swap(new org.bukkit.event.player.PlayerSwapHandItemsEvent(victim, spear, sword));
+        assertTrue(modifiers.isEmpty());
+        when(inventory.getItemInMainHand()).thenReturn(spear);
+        classic.swap(new org.bukkit.event.player.PlayerSwapHandItemsEvent(victim, sword, spear));
+        assertEquals(1, modifiers.size());
+    }
+    @Test public void pluginReplacementAndInventoryChangeReadActualHandNotContainerSlot() {
+        enableModernItems("DIAMOND_SPEAR");
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var sword = weapon(Material.IRON_SWORD); var spear = weapon(Material.DIAMOND_SPEAR);
+        when(victim.getInventory()).thenReturn(inventory);
+        when(inventory.getItemInMainHand()).thenReturn(sword); classic.reconcile(victim);
+        when(inventory.getItemInMainHand()).thenReturn(spear);
+        var change = mock(io.papermc.paper.event.player.PlayerInventorySlotChangeEvent.class);
+        when(change.getPlayer()).thenReturn(victim);
+        classic.slotChanged(change); assertTrue(modifiers.isEmpty());
+        when(inventory.getItemInMainHand()).thenReturn(sword);
+        var equipment = mock(io.papermc.paper.event.entity.EntityEquipmentChangedEvent.class);
+        when(equipment.getEntity()).thenReturn(victim);
+        when(equipment.getEquipmentChanges()).thenReturn(Map.of(org.bukkit.inventory.EquipmentSlot.HAND,
+                mock(io.papermc.paper.event.entity.EntityEquipmentChangedEvent.EquipmentChange.class)));
+        classic.equipment(equipment); assertEquals(1, modifiers.size());
+        when(inventory.getItemInMainHand()).thenReturn(spear);
+        classic.equipment(equipment); assertTrue(modifiers.isEmpty());
+    }
+    @Test public void spearPreservesForeignModifiersAndNativeBase() {
+        enableModernItems("WOODEN_SPEAR");
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var spear = weapon(Material.WOODEN_SPEAR);
+        when(victim.getInventory()).thenReturn(inventory);
+        var foreignKey = new NamespacedKey("other", "custom_speed");
+        var foreign = new AttributeModifier(foreignKey, 0.25, AttributeModifier.Operation.ADD_NUMBER);
+        modifiers.put(foreignKey, foreign);
+        classic.reconcile(victim);
+        assertEquals(2, modifiers.size());
+        when(inventory.getItemInMainHand()).thenReturn(spear);
+        classic.reconcile(victim); classic.reconcile(victim);
+        assertEquals(Map.of(foreignKey, foreign), modifiers);
+        verify(speed, never()).setBaseValue(anyDouble());
+        verify(speed, never()).removeModifier(foreignKey);
+    }
+    @Test public void highModeAndExcludedPlayersNeverGainClassicSpeedWhenSwitchingWeapons() {
+        enableModernItems("IRON_SPEAR");
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var sword = weapon(Material.IRON_SWORD); var spear = weapon(Material.IRON_SPEAR);
+        when(victim.getInventory()).thenReturn(inventory);
+        when(inventory.getItem(0)).thenReturn(sword); when(inventory.getItem(1)).thenReturn(spear);
+        classic.reconcile(victim);
+        store.excluded(victim.getUniqueId(), true);
+        classic.held(new org.bukkit.event.player.PlayerItemHeldEvent(victim, 1, 0));
+        assertTrue(modifiers.isEmpty());
+        classic.held(new org.bukkit.event.player.PlayerItemHeldEvent(victim, 0, 1));
+        assertTrue(modifiers.isEmpty());
+        store.excluded(victim.getUniqueId(), false);
+        settings = settings.withMode(CombatMode.MODERN, ClassicSettings.defaults());
+        classic.swap(new org.bukkit.event.player.PlayerSwapHandItemsEvent(victim, sword, spear));
+        assertTrue(modifiers.isEmpty());
+    }
+    @Test public void spearRespawnAndRepeatedReconcileDoNotReintroduceBonus() {
+        enableModernItems("GOLDEN_SPEAR");
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var spear = weapon(Material.GOLDEN_SPEAR);
+        when(victim.getInventory()).thenReturn(inventory);
+        when(inventory.getItemInMainHand()).thenReturn(spear);
+        var joined = mock(org.bukkit.event.player.PlayerJoinEvent.class);
+        when(joined.getPlayer()).thenReturn(victim);
+        classic.join(joined);
+        var respawn = mock(org.bukkit.event.player.PlayerRespawnEvent.class);
+        when(respawn.getPlayer()).thenReturn(victim);
+        EntityScheduler scheduler = victim.getScheduler();
+        doAnswer(call -> {
+            java.util.function.Consumer<ScheduledTask> action = call.getArgument(1);
+            action.accept(mock(ScheduledTask.class));
+            return mock(ScheduledTask.class);
+        }).when(scheduler).run(any(), any(), any());
+        classic.respawn(respawn); classic.reconcile(victim);
+        assertTrue(modifiers.isEmpty());
+        assertEquals(settings.classic().hitIntervalTicks() * 2, immunity.get());
+        verify(speed, never()).addTransientModifier(any());
+    }
+    @Test public void nullAndEmptyHandRetainClassicSpeed() {
+        classic.reconcile(victim); assertEquals(1, modifiers.size());
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var air = weapon(Material.AIR);
+        when(victim.getInventory()).thenReturn(inventory);
+        when(inventory.getItemInMainHand()).thenReturn(air);
+        classic.reconcile(victim); assertEquals(1, modifiers.size());
+        verify(speed, times(1)).addTransientModifier(any());
+    }
+    @Test public void allEquipmentEntryPointsUseConfigurableMaceExceptionAndHonorRemoval() {
+        enableModernItems("MACE");
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var sword = weapon(Material.IRON_SWORD); var mace = weapon(Material.MACE);
+        when(victim.getInventory()).thenReturn(inventory);
+        when(inventory.getItemInMainHand()).thenReturn(sword); classic.reconcile(victim);
+        classic.swap(new org.bukkit.event.player.PlayerSwapHandItemsEvent(victim, mace, sword));
+        assertTrue(modifiers.isEmpty());
+        when(inventory.getItemInMainHand()).thenReturn(mace);
+        var slot = mock(io.papermc.paper.event.player.PlayerInventorySlotChangeEvent.class);
+        when(slot.getPlayer()).thenReturn(victim); classic.slotChanged(slot); assertTrue(modifiers.isEmpty());
+        var equipment = mock(io.papermc.paper.event.entity.EntityEquipmentChangedEvent.class);
+        when(equipment.getEntity()).thenReturn(victim);
+        when(equipment.getEquipmentChanges()).thenReturn(Map.of(org.bukkit.inventory.EquipmentSlot.HAND,
+                mock(io.papermc.paper.event.entity.EntityEquipmentChangedEvent.EquipmentChange.class)));
+        classic.equipment(equipment); assertTrue(modifiers.isEmpty());
+        settings = settings.withItems(ItemCombat.empty()); classic.slotChanged(slot); assertEquals(1, modifiers.size());
+        // Spears must also follow item.yml: removing the exception restores Classic behavior.
+        var spear = weapon(Material.IRON_SPEAR);
+        when(inventory.getItemInMainHand()).thenReturn(spear);
+        classic.equipment(equipment); assertEquals(1, modifiers.size());
+    }
+    @Test public void foreignRegionEquipmentEventsNeverReadInventoryOrAttributes() {
+        var held = new org.bukkit.event.player.PlayerItemHeldEvent(victim, 0, 1);
+        var swap = new org.bukkit.event.player.PlayerSwapHandItemsEvent(victim, null, null);
+        var slot = mock(io.papermc.paper.event.player.PlayerInventorySlotChangeEvent.class);
+        when(slot.getPlayer()).thenReturn(victim);
+        var equipment = mock(io.papermc.paper.event.entity.EntityEquipmentChangedEvent.class);
+        when(equipment.getEntity()).thenReturn(victim);
+        bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(false);
+        clearInvocations(victim, speed);
+        classic.held(held); classic.swap(swap); classic.slotChanged(slot); classic.equipment(equipment);
+        verifyNoInteractions(victim, speed);
+    }
+    @Test public void nonMainHandEquipmentChangeDoesNotTouchCombatAttributes() {
+        var equipment = mock(io.papermc.paper.event.entity.EntityEquipmentChangedEvent.class);
+        when(equipment.getEntity()).thenReturn(victim);
+        when(equipment.getEquipmentChanges()).thenReturn(Map.of(org.bukkit.inventory.EquipmentSlot.OFF_HAND,
+                mock(io.papermc.paper.event.entity.EntityEquipmentChangedEvent.EquipmentChange.class)));
+        clearInvocations(victim, speed);
+        classic.equipment(equipment);
+        verify(victim, never()).getInventory(); verifyNoInteractions(speed);
+    }
     @Test public void tickCounterWrapDoesNotBlockForever() {
         assertTrue(ClassicCombat.within(Integer.MAX_VALUE, Integer.MIN_VALUE + 2, 10));
         assertFalse(ClassicCombat.within(Integer.MAX_VALUE, Integer.MIN_VALUE + 9, 10));

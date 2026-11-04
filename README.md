@@ -1,4 +1,4 @@
-# ModernKnockBack 2.4.1
+# ModernKnockBack 2.5.0
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -30,7 +30,9 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.4.1.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.5.0.jar`。
+
+2.5.0 合并 [DevXingMC 的 PR #2](https://github.com/ImMengXin0/ModernKnockBack/pull/2)：修复长矛突刺/突进沿用 Classic 无冷却攻速，补齐切槽、副手交换、装备更新和插件替换手持物品时的即时同步。整合后的例外统一由 `classic/item.yml` 决定，重锤与自定义物品同样生效；补上排除/Modern 状态的旧攻速清理及 Folia 区域检查。包含下述物品例外功能、既有免疫窗口衔接和原有网络补丁，见 [2.5.0 发布说明](docs/RELEASE-2.5.0.md)。
 
 2.4.1 新增 Classic 物品例外：白名单主手武器恢复原生冷却、疾跑资格和武器机制；击退从 `modern/` 对应路由读取，跳过 Classic 向量、CPS 减退及重复组件合并。`/mkb reload` 同时校验列表与依赖的 Modern 配置；鱼竿接武器保护和 Classic 全局碰撞/视听规则继续生效。
 

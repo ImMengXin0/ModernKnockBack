@@ -1,6 +1,6 @@
 # ModernKnockBack 1.21.11 使用与接口
 
-当前版本 2.4.1，新增 `classic/item.yml`：指定主手物品使用原生高版本攻击方式和 `modern/` 中的 KB 参数，默认全部长矛及重锤，支持重载，见 [物品例外](ITEM-COMBAT.md)。保留 2.4.0 的首次初始化预热与网络发送补丁、Classic 斧头伤害修正、jump reset 反向动量上限、[CPS 密度](CLICK-DENSITY.md)、鱼钩空中重力倍率和旧版命中反馈。客户端模型及持刀动画并未替换。
+当前版本 2.5.0，合并长矛攻速修复与完整的装备更新入口，并包含 `classic/item.yml`：指定主手物品使用原生高版本攻击方式和 `modern/` 中的 KB 参数，默认全部长矛及重锤，支持重载，见 [物品例外](ITEM-COMBAT.md)和 [2.5.0 发布说明](RELEASE-2.5.0.md)。保留 2.4.0 的首次初始化预热与网络发送补丁、Classic 斧头伤害修正、jump reset 反向动量上限、[CPS 密度](CLICK-DENSITY.md)、鱼钩空中重力倍率和旧版命中反馈。客户端模型及持刀动画并未替换。
 
 classic 保留固定受击倾斜、Leaf 立即同步第二次速度事件保护及鱼钩原生附着。被钩玩家看不到挡脸鱼钩；每枚钩只触发一次受击，右键收杆不拉回，连续杆及竿接刀默认保护10 tick。普通近战保持原生3.0格距离、贴身暴击方向修复，鱼钩保持0.3格碰撞余量。源码依据见 [鱼竿修复](CLASSIC-ROD-STACK.md)，技巧复测见 [Classic 技巧与延迟](CLASSIC-TECHNIQUES.md)，配置规则见 [配置补全](CONFIG-COMPLETION.md)和 [战斗模式](COMBAT-MODES.md)。本文现代公式描述 modern 路径。
 
@@ -9,7 +9,7 @@ classic 保留固定受击倾斜、Leaf 立即同步第二次速度事件保护�
 2.4.0 同时包含无需配置的 [网络发送优化](NETWORK-DELIVERY.md)：classic / modern 的本人速度和爆炸包及时刷新，减少服务端批量发送等待。保持向量、受击间隔和包顺序；丢包由 TCP 重传，不额外重发 KB。
 
 1. 使用 Java 21 或更高版本，服务器版本必须为 Minecraft 1.21.11。
-2. 把 `ModernKnockBack-2.4.1.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
+2. 把 `ModernKnockBack-2.5.0.jar` 放入服务器 `plugins`，移除旧版本 ModernKnockBack Jar 后正常重启。本插件不依赖旧 KnockbackManager；检测到旧插件同服存在时会拒绝启用，以免叠加修改。
 3. 启动后检查 `/mkb status`，编辑当前模式目录 `plugins/ModernKnockBack/modern/` 或 `classic/` 内的配置，用 `/mkb reload` 重载，用 `/kbtest classic` 或 `/kbtest modern` 切换。
 4. 配置错误会拒绝应用，并保留当前已加载配置。启动时配置损坏会明确报错、停止启用，不会生成一份默认配置覆盖损坏文件。
 
