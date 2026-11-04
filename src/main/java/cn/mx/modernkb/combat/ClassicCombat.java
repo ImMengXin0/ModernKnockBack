@@ -8,6 +8,8 @@ import cn.mx.modernkb.rod.ClassicRodContact;
 import com.destroystokyo.paper.event.player.PlayerJumpEvent;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.event.entity.EntityPushedByEntityAttackEvent;
+import io.papermc.paper.event.entity.EntityEquipmentChangedEvent;
+import io.papermc.paper.event.player.PlayerInventorySlotChangeEvent;
 import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.util.*;
@@ -154,11 +156,9 @@ public final class ClassicCombat implements Listener {
         managed.put(entity.getUniqueId(), entity);
         var data = entity.getPersistentDataContainer();
         if (entity instanceof Player player) {
-            reconcileAxe(player, config.classic().legacyAxeDamage() && player.getInventory() != null
-                    ? player.getInventory().getItemInMainHand() : null);
-            var speed = entity.getAttribute(Attribute.ATTACK_SPEED);
-            if (speed != null && speed.getModifier(speedKey) == null)
-                speed.addTransientModifier(new AttributeModifier(speedKey, ATTACK_SPEED_BONUS, AttributeModifier.Operation.ADD_NUMBER));
+            var item = player.getInventory() == null ? null : player.getInventory().getItemInMainHand();
+            reconcileAxe(player, config.classic().legacyAxeDamage() ? item : null);
+            reconcileSpeed(player, item, true);
         }
         if (!data.has(savedImmunityKey, PersistentDataType.INTEGER))
             data.set(savedImmunityKey, PersistentDataType.INTEGER, entity.getMaximumNoDamageTicks());
@@ -171,6 +171,26 @@ public final class ClassicCombat implements Listener {
             // Clamp only an ordinary window from the previous duration, never a spawn/plugin protection.
             if (remaining <= oldDuration && remaining > duration) entity.setNoDamageTicks(duration);
         }
+    }
+
+    private void reconcileSpeed(Player player, org.bukkit.inventory.ItemStack item, boolean classic) {
+        var speed = player.getAttribute(Attribute.ATTACK_SPEED);
+        if (speed == null) return;
+        // Spears use attack speed for their minimum jab charge, including Lunge.
+        // Keep their native/item-defined speed; never overwrite the base or another plugin's modifiers.
+        boolean boost = classic && (item == null || !item.getType().name().endsWith("_SPEAR"));
+        var previous = speed.getModifier(speedKey);
+        if (!boost && previous != null) speed.removeModifier(speedKey);
+        else if (boost && previous == null)
+            speed.addTransientModifier(new AttributeModifier(speedKey, ATTACK_SPEED_BONUS, AttributeModifier.Operation.ADD_NUMBER));
+    }
+
+    private void reconcileEquipment(Player player, org.bukkit.inventory.ItemStack item) {
+        if (!CombatTracker.owns(player)) return;
+        Settings config = settings.get();
+        boolean classic = config.classicEnabled() && eligible(player, config);
+        reconcileAxe(player, classic && config.classic().legacyAxeDamage() ? item : null);
+        reconcileSpeed(player, item, classic);
     }
     /** Change the base attribute before vanilla computes criticals, enchantments and armor. */
     private void reconcileAxe(Player player, org.bukkit.inventory.ItemStack item) {
@@ -205,13 +225,27 @@ public final class ClassicCombat implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void held(PlayerItemHeldEvent event) {
         Player player = event.getPlayer();
-        Settings config = settings.get();
-        if (config.classicEnabled() && eligible(player, config))
-            reconcileAxe(player, config.classic().legacyAxeDamage() ? player.getInventory().getItem(event.getNewSlot()) : null);
-        else reconcileAxe(player, null);
+        // The selected slot has not changed yet. Reconcile the destination synchronously:
+        // a native spear jab does not go through PrePlayerAttackEntityEvent.
+        reconcileEquipment(player, player.getInventory().getItem(event.getNewSlot()));
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void swap(PlayerSwapHandItemsEvent event) { refreshEquipment(event.getPlayer()); }
+    public void swap(PlayerSwapHandItemsEvent event) {
+        reconcileEquipment(event.getPlayer(), event.getMainHandItem());
+        refreshEquipment(event.getPlayer());
+    }
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void equipment(EntityEquipmentChangedEvent event) {
+        if (event.getEntity() instanceof Player player
+                && event.getEquipmentChanges().containsKey(org.bukkit.inventory.EquipmentSlot.HAND))
+            reconcileEquipment(player, player.getInventory().getItemInMainHand());
+    }
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void slotChanged(PlayerInventorySlotChangeEvent event) {
+        // Read the actual hand, not a raw container slot. This also covers shop/plugin replacements.
+        Player player = event.getPlayer();
+        reconcileEquipment(player, player.getInventory().getItemInMainHand());
+    }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void drop(PlayerDropItemEvent event) { refreshEquipment(event.getPlayer()); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
