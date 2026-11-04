@@ -1,4 +1,4 @@
-# ModernKnockBack 2.3.1
+# ModernKnockBack 2.4.0
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -29,11 +29,11 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.3.1.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.4.0.jar`。
 
-2.3.1 将 Leaf 速度派发识别和受击包改写的首次初始化提前到插件启动，减少重启后全服第一击的服务端初始化开销。预初始化只处理内存对象，不发送受击或速度包；详见 [首次击退审查](docs/FIRST-HIT.md)。
+2.4.0 将 Leaf 速度派发识别和受击包改写的首次初始化提前到插件启动，减少重启后全服第一击的服务端初始化开销。预初始化只处理内存对象，不发送受击或速度包；详见 [首次击退审查](docs/FIRST-HIT.md)。
 
-2.3.1 本地整合版吸收 [DevXingMC 的 PR #1](https://github.com/ImMengXin0/ModernKnockBack/pull/1)：启动预热战斗类和纯计算路径，将首击提交/清理回调改为显式类，并跳过非旧版斧头的 ItemMeta 读取。保留上述初始化修复及网络发送补丁，不新增配置。整合后 331 项测试及三核心离线检查通过；作者的 Paper 冷启动测量见 [PR 验证记录](docs/FIRST-HIT-WARMUP.md)，不是本次整合包的实服性能结果。
+2.4.0 合并 [DevXingMC 的 PR #1](https://github.com/ImMengXin0/ModernKnockBack/pull/1)：启动预热战斗类和纯计算路径，将首击提交/清理回调改为显式类，并跳过非旧版斧头的 ItemMeta 读取。保留上述初始化修复及网络发送补丁，不新增配置。整合代码已通过 331 项测试及三核心离线检查；作者的 Paper 冷启动测量见 [PR 验证记录](docs/FIRST-HIT-WARMUP.md)，不是本次整合包的实服性能结果。
 
 2.3.0 新增 classic 的 1.8 斧头基础伤害适配。`legacy-axe-damage: true` 默认开启并自动补全；标准玩家基础属性下，木/金、石、铁、钻石斧的基础总伤害为 4、5、6、7 点。通过临时属性修正交给原生流程计算后续伤害，支持切换武器及切回 modern 时恢复。完整变更和升级方法见 [2.3.0 发布说明](docs/RELEASE-2.3.0.md)。
 
