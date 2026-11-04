@@ -15,12 +15,14 @@ import java.util.*;
 public final class FirstHitQA extends JavaPlugin implements Listener {
     private final Map<UUID, Vector> velocity = new HashMap<>();
     private boolean active;
+    private NetworkHitProbe network;
     @Override public void onEnable() {
         if (!getServer().getIp().equals("127.0.0.1") || getServer().getPort() != 27183) {
             getLogger().severe("Requires dedicated loopback port 27183");
             getServer().getPluginManager().disablePlugin(this); return;
         }
         Bukkit.getPluginManager().registerEvents(this, this);
+        network = new NetworkHitProbe(this);
         World world = Bukkit.getWorlds().getFirst();
         for (int x = -5; x <= 10; x++) for (int z = -5; z <= 5; z++)
             world.getBlockAt(x, 90, z).setType(Material.STONE);
@@ -35,13 +37,18 @@ public final class FirstHitQA extends JavaPlugin implements Listener {
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player p) || !p.getName().startsWith("KBQA") || args.length == 0) return true;
         if (args[0].equals("stop")) { p.sendMessage("FIRST_HIT_STOPPING"); Bukkit.getScheduler().runTaskLater(this, Bukkit::shutdown, 10); return true; }
-        if (!args[0].equals("bench") || args.length < 2 || active) return true;
+        if (!(args[0].equals("bench") || args[0].equals("network")) || args.length < 2 || active) return true;
         Player target = Bukkit.getPlayerExact(args[1]);
         if (target == null || target == p) return true;
+        if (args[0].equals("network")) {
+            network.start(p, target, args.length > 3 ? args[3].replaceAll("[^a-zA-Z0-9_-]", "") : "single");
+            return true;
+        }
         active = true;
         p.getInventory().setItemInMainHand(new ItemStack(Material.IRON_SWORD));
         target.getInventory().setArmorContents(new ItemStack[4]);
         boolean instrument = args.length > 2 && args[2].equals("instrument");
+        String cycle = args.length > 3 ? args[3].replaceAll("[^a-zA-Z0-9_-]", "") : "single";
         FirstHitProbe probe = instrument ? new FirstHitProbe() : null;
         new BukkitRunnable() {
             int step, hits;
@@ -57,8 +64,8 @@ public final class FirstHitQA extends JavaPlugin implements Listener {
                     if (probe != null) probe.begin();
                     long start = System.nanoTime(); p.attack(target); double ms = (System.nanoTime() - start) / 1e6;
                     String handlers = probe == null ? "disabled" : probe.finish();
-                    getLogger().info("FIRST_HIT_SAMPLE n=" + (++hits) + " attackMs=" + ms
-                            + " damage=" + (before - target.getHealth()) + " sent=" + velocity.get(target.getUniqueId())
+                    getLogger().info("FIRST_HIT_SAMPLE cycle=" + cycle + " attacker=" + p.getName() + " n=" + (++hits) + " attackMs=" + ms
+                            + " damage=" + (before - target.getHealth()) + " velocityEvent=" + velocity.get(target.getUniqueId())
                             + " handlers=" + handlers);
                     if (target.getHealth() >= before || velocity.get(target.getUniqueId()) == null)
                         throw new IllegalStateException("Missing damage or velocity event");
