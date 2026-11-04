@@ -64,7 +64,8 @@ public final class CombatTracker implements Listener {
         Attack value = new Attack(event.getAttacked().getUniqueId(), p.getTicksLived(), sprint(p), p.getAttackCooldown());
         UUID id = p.getUniqueId();
         attacks.put(id, value);
-        if (p.getScheduler().run(plugin, task -> attacks.remove(id, value), () -> attacks.remove(id, value)) == null) attacks.remove(id, value);
+        var cleanup = new RemoveEntryTask<>(attacks, id, value);
+        if (p.getScheduler().run(plugin, cleanup, cleanup) == null) cleanup.run();
     }
     public Source source(Entity entity, UUID victim) {
         if (!owns(entity)) return new Source(null, null, CombatantKind.UNKNOWN, HitType.UNKNOWN, false, Double.NaN);
@@ -95,7 +96,8 @@ public final class CombatTracker implements Listener {
         if (direct == null) direct = event.getDamager();
         Damage damage = new Damage(event, victim.getTicksLived(), source(direct, id));
         damages.put(id, damage);
-        if (victim.getScheduler().run(plugin, task -> damages.remove(id, damage), () -> damages.remove(id, damage)) == null) damages.remove(id, damage);
+        var cleanup = new RemoveEntryTask<>(damages, id, damage);
+        if (victim.getScheduler().run(plugin, cleanup, cleanup) == null) cleanup.run();
     }
     public HitContext context(Entity victim, Entity pushedBy, String cause, boolean sync) {
         UUID id = victim.getUniqueId();
@@ -126,7 +128,11 @@ public final class CombatTracker implements Listener {
         boolean server = player.isSprinting();
         // Player-shaped NPCs may never send client sprint actions. Always use their entity state.
         if (kind(player) == CombatantKind.BOT) return server;
-        boolean client = clientSprints.computeIfAbsent(player.getUniqueId(), id -> server);
+        Boolean client = clientSprints.get(player.getUniqueId());
+        if (client == null) {
+            Boolean previous = clientSprints.putIfAbsent(player.getUniqueId(), server);
+            client = previous == null ? server : previous;
+        }
         Settings config = settings.get();
         return config.classicEnabled() && !config.classic().stopSprint() ? client : server;
     }

@@ -458,4 +458,19 @@ public class ClassicVelocityProtectionTest {
             leaf.verifyNoInteractions();
         }
     }
+    @Test public void retiredCleanupRemovesItsGenerationButPreservesANewerHit() {
+        var retired = new ArrayList<Runnable>();
+        EntityScheduler scheduler = victim.getScheduler();
+        doAnswer(call -> {
+            retired.add(call.getArgument(2));
+            return mock(ScheduledTask.class);
+        }).when(scheduler).runDelayed(any(), any(), any(), anyLong());
+        pending(melee);
+        retired.getFirst().run();
+        assertEquals(new Vector(), dispatchAfterDirectSyncWrite(new Vector(.4, .36, 0)).getVelocity());
+        pending(melee);
+        retired.getFirst().run();
+        Vector newer = new Vector(-.3, .31, .1);
+        assertEquals(newer, dispatchAfterDirectSyncWrite(newer).getVelocity());
+    }
 }

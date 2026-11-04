@@ -18,7 +18,7 @@ public final class CombatWarmup {
                 ClassicClickDensity.class, ClassicJumpTracker.class, HitClassifier.class,
                 ClassicKnockbackMath.class, KnockbackMath.class, NativeKnockbackMath.class,
                 HitContext.class, HitType.class, CombatantKind.class, KnockbackProfileEvent.class,
-                KnockbackModifyEvent.class, LeafVelocityDispatch.class)) initializeTree(root);
+                KnockbackModifyEvent.class, LeafVelocityDispatch.class, RemoveEntryTask.class)) initializeTree(root);
 
         // Bounded, pure calculations link switch/lambda call sites as well as loading their classes.
         // The supplied profile is immutable. Local samples never enter a live combat tracker.
