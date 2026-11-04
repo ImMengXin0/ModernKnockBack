@@ -44,6 +44,7 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
             settings = modes.load(modes.selected());
             players = new PlayerStore(getDataPath().resolve("players.yml"));
             validateAssignments(settings);
+            CombatWarmup.prepare(settings.profiles().get("default"));
             tracker = new CombatTracker(this, () -> settings);
             sync = new SyncCompatibility(); sync.refresh();
             classic = new ClassicCombat(this, () -> settings, players, tracker, RodVelocity.forServer());
