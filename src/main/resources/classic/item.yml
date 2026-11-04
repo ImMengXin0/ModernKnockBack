@@ -1,0 +1,13 @@
+# Classic 模式下，这些主手物品遵循原生高版本攻击冷却和武器机制。
+# 击退从 modern/config.yml 和 modern/profiles.yml 的对应类型路由读取。
+# /mkb reload 或 /kbtest reload 同时重载此文件及依赖的 Modern 参数。
+# 使用 Bukkit 材质名；列表设为 [] 可取消全部例外。不会补回你主动移除的物品。
+modern-items:
+  - WOODEN_SPEAR
+  - STONE_SPEAR
+  - COPPER_SPEAR
+  - IRON_SPEAR
+  - GOLDEN_SPEAR
+  - DIAMOND_SPEAR
+  - NETHERITE_SPEAR
+  - MACE

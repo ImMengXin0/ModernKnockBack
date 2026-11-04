@@ -9,15 +9,32 @@ import org.bukkit.configuration.file.YamlConfiguration;
 /** A validated immutable configuration, published atomically to all regions. */
 public record Settings(boolean enabled, boolean affectOthers, boolean respectPlayerProfile,
                        boolean preserveSyncY, Set<String> botMetadata, Map<String, KnockbackProfile> profiles,
-                       Map<String,String> routes, Map<String,String> matchups, CombatMode mode, ClassicSettings classic) {
+                       Map<String,String> routes, Map<String,String> matchups, CombatMode mode, ClassicSettings classic,
+                       ItemCombat items) {
+    /** Preserve the pre-item-exceptions constructor for integrations. */
+    public Settings(boolean enabled, boolean affectOthers, boolean respectPlayerProfile,
+                    boolean preserveSyncY, Set<String> botMetadata, Map<String,KnockbackProfile> profiles,
+                    Map<String,String> routes, Map<String,String> matchups, CombatMode mode, ClassicSettings classic) {
+        this(enabled, affectOthers, respectPlayerProfile, preserveSyncY, botMetadata, profiles, routes, matchups, mode, classic, ItemCombat.empty());
+    }
     public Settings(boolean enabled, boolean affectOthers, boolean respectPlayerProfile, boolean preserveSyncY,
                     Set<String> botMetadata, Map<String,KnockbackProfile> profiles, Map<String,String> routes, Map<String,String> matchups) {
         this(enabled, affectOthers, respectPlayerProfile, preserveSyncY, botMetadata, profiles, routes, matchups,
                 CombatMode.MODERN, ClassicSettings.defaults());
     }
     public Settings withMode(CombatMode mode, ClassicSettings classic) {
-        return new Settings(enabled, affectOthers, respectPlayerProfile, preserveSyncY, botMetadata, profiles, routes, matchups, mode, classic);
+        return new Settings(enabled, affectOthers, respectPlayerProfile, preserveSyncY, botMetadata, profiles, routes, matchups, mode, classic, items);
     }
+    public Settings withItems(ItemCombat items) {
+        return new Settings(enabled, affectOthers, respectPlayerProfile, preserveSyncY, botMetadata, profiles, routes, matchups, mode, classic, items);
+    }
+    public boolean modernItem(String material) { return classicEnabled() && items.contains(material); }
+    public boolean modernAttack(HitContext hit) {
+        return modernItem(hit.weapon()) && hit.attacker() != null && hit.attacker().equals(hit.source())
+                && (hit.type() == HitType.MELEE || hit.type() == HitType.MACE || hit.type() == HitType.SPEAR
+                    || hit.type() == HitType.SWEEP || hit.type() == HitType.SHIELD_BLOCK);
+    }
+    public Settings combatSettings(HitContext hit) { return modernAttack(hit) ? items.modern() : this; }
     public boolean classicEnabled() { return enabled && mode == CombatMode.CLASSIC; }
     public static Settings load(Path directory) {
         var config = YamlFiles.load(directory.resolve("config.yml"));

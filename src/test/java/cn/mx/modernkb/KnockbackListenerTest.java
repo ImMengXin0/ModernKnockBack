@@ -138,4 +138,62 @@ public class KnockbackListenerTest {
         listener.knockback(event);
         assertEquals(-0.32, event.getKnockback().getX(), 1e-12); assertEquals(1, listener.nativeHandled());
     }
+    private ClassicCombat modernItems(String... names) {
+        Settings modern = new Settings(true, false, true, true, Set.of(), Map.of(
+                "default", KnockbackMathTest.profile(),
+                "heavy", KnockbackMathTest.profile("horizontal.ground", 1.5, "vertical.ground", .5)),
+                Map.of("mace", "heavy", "spear", "heavy"), Map.of());
+        settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults()).withItems(new ItemCombat(Set.of(names), modern));
+        ClassicCombat classic = mock(ClassicCombat.class);
+        listener = new KnockbackListener(() -> settings, players, tracker, () -> true, classic);
+        return classic;
+    }
+    private void weaponHit(HitType type, String weapon) {
+        UUID attacker = UUID.randomUUID();
+        UUID target = victim.getUniqueId();
+        when(tracker.context(eq(victim), isNull(), anyString(), anyBoolean())).thenReturn(new HitContext(
+                target, attacker, attacker, type, CombatantKind.PLAYER, CombatantKind.PLAYER,
+                "ENTITY_ATTACK", true, false, false, .25, false, weapon));
+    }
+    @Test public void selectedWeaponsUseModernProfilesAndApiModeWhileRespectingSync() {
+        var classic = modernItems("MACE", "IRON_SPEAR");
+        for (var entry : Map.of("MACE", HitType.MACE, "IRON_SPEAR", HitType.SPEAR).entrySet()) {
+            clearInvocations(manager, classic); weaponHit(entry.getValue(), entry.getKey());
+            var event = event(); listener.knockback(event);
+            assertEquals(.3, event.getKnockback().getX(), 1e-12);
+            assertEquals(-.15, event.getKnockback().getZ(), 1e-12);
+            assertEquals(.3, event.getKnockback().getY(), 0); // Modern preserve-y policy, not Classic.
+            var captured = org.mockito.ArgumentCaptor.forClass(Event.class); verify(manager, times(2)).callEvent(captured.capture());
+            assertEquals(CombatMode.MODERN, ((KnockbackProfileEvent)captured.getAllValues().getFirst()).getMode());
+            assertEquals("heavy", ((KnockbackProfileEvent)captured.getAllValues().getFirst()).getProfile());
+            assertEquals(CombatMode.MODERN, ((KnockbackModifyEvent)captured.getAllValues().getLast()).getMode());
+            verify(classic).releaseVelocity(victim); verify(classic, never()).calculate(any(), any(), any(), any());
+        }
+    }
+    @Test public void unlistedWeaponsAndProjectilesStayClassicAndReloadCanRemoveExceptions() {
+        var classic = modernItems("MACE");
+        for (var entry : List.of(Map.entry("IRON_SWORD", HitType.MELEE), Map.entry("MACE", HitType.FISHING_ROD), Map.entry("MACE", HitType.ARROW))) {
+            // A held weapon cannot convert a scoped rod or arrow into a modern melee hit.
+            clearInvocations(classic); weaponHit(entry.getValue(), entry.getKey());
+            var event = event(); listener.knockback(event);
+            assertEquals(.4, event.getKnockback().getX(), 1e-12);
+            verify(classic).calculate(eq(event), any(), any(), same(settings));
+            verify(classic, never()).releaseVelocity(any());
+        }
+        settings = settings.withItems(ItemCombat.empty()); weaponHit(HitType.MACE, "MACE");
+        var event = event(); listener.knockback(event); assertEquals(.4, event.getKnockback().getX(), 1e-12);
+    }
+    @Test public void selectedItemsUseModernBeforeSyncOrDisabledWithoutClassicFallback() {
+        var classic = modernItems("MACE"); weaponHit(HitType.MACE, "MACE");
+        var modern = settings.items().modern();
+        settings = settings.withItems(new ItemCombat(Set.of("MACE"), new Settings(true, false, true, false,
+                modern.botMetadata(), modern.profiles(), modern.routes(), modern.matchups())));
+        var event = event(); listener.knockback(event); assertEquals(.15, event.getKnockback().getY(), 1e-12);
+        settings = settings.withItems(new ItemCombat(Set.of("MACE"), new Settings(false, false, true, false,
+                modern.botMetadata(), modern.profiles(), modern.routes(), modern.matchups())));
+        clearInvocations(manager, classic);
+        event = event(); listener.knockback(event); assertEquals(new Vector(.2, .3, -.1), event.getKnockback());
+        verifyNoInteractions(manager); verify(classic).releaseVelocity(victim);
+        verify(classic, never()).calculate(any(), any(), any(), any());
+    }
 }

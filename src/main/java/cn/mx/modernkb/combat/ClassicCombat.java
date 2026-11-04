@@ -148,29 +148,58 @@ public final class ClassicCombat implements Listener {
     }
     /** Entity-region only. A transient modifier avoids overwriting item or other plugin base values. */
     public void reconcile(LivingEntity entity) {
+        reconcile(entity, false);
+    }
+    private void reconcile(LivingEntity entity, boolean modernHit) {
         if (!CombatTracker.owns(entity)) return;
         Settings config = settings.get();
         if (!config.classicEnabled() || !eligible(entity, config)) { restore(entity); return; }
         managed.put(entity.getUniqueId(), entity);
         var data = entity.getPersistentDataContainer();
         if (entity instanceof Player player) {
-            reconcileAxe(player, config.classic().legacyAxeDamage() && player.getInventory() != null
-                    ? player.getInventory().getItemInMainHand() : null);
-            var speed = entity.getAttribute(Attribute.ATTACK_SPEED);
-            if (speed != null && speed.getModifier(speedKey) == null)
-                speed.addTransientModifier(new AttributeModifier(speedKey, ATTACK_SPEED_BONUS, AttributeModifier.Operation.ADD_NUMBER));
+            reconcileWeapon(player, player.getInventory() == null ? null : player.getInventory().getItemInMainHand(), config);
         }
         if (!data.has(savedImmunityKey, PersistentDataType.INTEGER))
             data.set(savedImmunityKey, PersistentDataType.INTEGER, entity.getMaximumNoDamageTicks());
-        int duration = config.classic().hitIntervalTicks() * 2;
-        data.set(appliedImmunityKey, PersistentDataType.INTEGER, duration);
+        setImmunity(entity, modernHit ? data.get(savedImmunityKey, PersistentDataType.INTEGER)
+                : config.classic().hitIntervalTicks() * 2, modernHit);
+    }
+    private void reconcileWeapon(Player player, org.bukkit.inventory.ItemStack item, Settings config) {
+        boolean modern = item != null && config.modernItem(item.getType().name());
+        reconcileAxe(player, !modern && config.classic().legacyAxeDamage() ? item : null);
+        var speed = player.getAttribute(Attribute.ATTACK_SPEED);
+        if (speed == null) return;
+        if (modern) {
+            if (speed.getModifier(speedKey) != null) speed.removeModifier(speedKey);
+            clickDensity.clear(player.getUniqueId());
+        } else if (speed.getModifier(speedKey) == null)
+            speed.addTransientModifier(new AttributeModifier(speedKey, ATTACK_SPEED_BONUS, AttributeModifier.Operation.ADD_NUMBER));
+    }
+    private void setImmunity(LivingEntity entity, int duration, boolean modernHit) {
+        var data = entity.getPersistentDataContainer();
         int oldDuration = entity.getMaximumNoDamageTicks();
+        Integer applied = data.get(appliedImmunityKey, PersistentDataType.INTEGER);
+        boolean modernTransition = modernHit || applied != null && applied == oldDuration
+                && applied.equals(data.get(savedImmunityKey, PersistentDataType.INTEGER));
+        data.set(appliedImmunityKey, PersistentDataType.INTEGER, duration);
         if (oldDuration != duration) {
             entity.setMaximumNoDamageTicks(duration);
             int remaining = entity.getNoDamageTicks();
-            // Clamp only an ordinary window from the previous duration, never a spawn/plugin protection.
-            if (remaining <= oldDuration && remaining > duration) entity.setNoDamageTicks(duration);
+            // Preserve elapsed time across hybrid weapon rules, rather than restarting a window
+            // or turning a fresh short Classic window into an already-expired Modern window.
+            // Leave zero/expired windows and longer spawn/plugin protections alone.
+            if (modernTransition && remaining > 0 && remaining <= oldDuration) {
+                int adjusted = Math.max(0, duration - (oldDuration - remaining));
+                if (adjusted != remaining) entity.setNoDamageTicks(adjusted);
+            } else if (remaining <= oldDuration && remaining > duration) entity.setNoDamageTicks(duration);
         }
+    }
+    private boolean modernWeapon(Entity source, Settings config) {
+        return source instanceof LivingEntity living && CombatTracker.owns(living) && config.modernItem(CombatItems.held(living));
+    }
+    private boolean modernDamage(EntityDamageByEntityEvent event, Settings config) {
+        Entity source = event.getDamageSource().getDirectEntity();
+        return meleeDamage(event) && modernWeapon(source == null ? event.getDamager() : source, config);
     }
     /** Change the base attribute before vanilla computes criticals, enchantments and armor. */
     private void reconcileAxe(Player player, org.bukkit.inventory.ItemStack item) {
@@ -207,7 +236,7 @@ public final class ClassicCombat implements Listener {
         Player player = event.getPlayer();
         Settings config = settings.get();
         if (config.classicEnabled() && eligible(player, config))
-            reconcileAxe(player, config.classic().legacyAxeDamage() ? player.getInventory().getItem(event.getNewSlot()) : null);
+            reconcileWeapon(player, player.getInventory().getItem(event.getNewSlot()), config);
         else reconcileAxe(player, null);
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -270,7 +299,13 @@ public final class ClassicCombat implements Listener {
         Settings config = settings.get();
         if (!config.classicEnabled() || !event.willAttack() || !(event.getAttacked() instanceof LivingEntity victim)
                 || !eligible(victim, config) || players.get(event.getPlayer().getUniqueId()).excluded()) return;
-        reconcile(victim);
+        boolean modern = modernWeapon(event.getPlayer(), config);
+        reconcile(victim, modern);
+        if (modern) {
+            // Rod-to-weapon protection still prevents a same-window rod + melee double hit.
+            if (blockedByRod(victim, config)) { event.setCancelled(true); preventedHits.increment(); }
+            return;
+        }
         boolean blocked = blocked(victim, config) || blockedByRod(victim, config);
         if (densityEligible(event.getPlayer(), config) && victim != event.getPlayer())
             densityAttempts.put(event, new DensityAttempt(config, blocked));
@@ -289,7 +324,7 @@ public final class ClassicCombat implements Listener {
     }
     private boolean densityEligible(Player player, Settings config) {
         if (!CombatTracker.owns(player)) return false;
-        boolean allowed = config.classicEnabled() && config.classic().clickDensityEnabled()
+        boolean allowed = config.classicEnabled() && !config.modernItem(CombatItems.held(player)) && config.classic().clickDensityEnabled()
                 && !players.get(player.getUniqueId()).excluded() && tracker.kind(player) == CombatantKind.PLAYER
                 && player.isValid() && !player.isDead() && !player.isFlying() && !player.isGliding()
                 && !player.isInsideVehicle() && !player.isSwimming()
@@ -311,7 +346,12 @@ public final class ClassicCombat implements Listener {
     public void guardDamage(EntityDamageByEntityEvent event) {
         Settings config = settings.get();
         if (!config.classicEnabled() || !(event.getEntity() instanceof LivingEntity victim) || !eligible(victim, config) || !combatDamage(event)) return;
-        reconcile(victim);
+        boolean modern = modernDamage(event, config);
+        reconcile(victim, modern);
+        if (modern) {
+            if (blockedByRod(victim, config)) { event.setCancelled(true); preventedHits.increment(); }
+            return;
+        }
         if (config.classic().disableSweep() && event.getCause() == EntityDamageEvent.DamageCause.ENTITY_SWEEP_ATTACK
                 || blocked(victim, config) || meleeDamage(event) && blockedByRod(victim, config)) {
             event.setCancelled(true); preventedHits.increment();
@@ -370,7 +410,7 @@ public final class ClassicCombat implements Listener {
     }
     /** null means leave this type to modern impulse handling; cancelled means suppress a repeated native component. */
     public Calculation calculate(EntityKnockbackEvent event, HitContext context, KnockbackProfile profile, Settings config) {
-        if (!config.classicEnabled() || !(event.getEntity() instanceof LivingEntity victim)) return null;
+        if (!config.classicEnabled() || config.modernAttack(context) || !(event.getEntity() instanceof LivingEntity victim)) return null;
         if (context.type() == HitType.SWEEP && config.classic().disableSweep()) { event.setCancelled(true); return null; }
         boolean supported = context.type().melee() || context.type() == HitType.ARROW || context.type() == HitType.CROSSBOW
                 || context.type() == HitType.FISHING_ROD || context.type() == HitType.OTHER_PROJECTILE;
@@ -438,6 +478,8 @@ public final class ClassicCombat implements Listener {
     public void applied(LivingEntity victim, Vector impulse, Settings config, HitContext context) {
         applied(victim, config, context, null);
     }
+    /** A modern item hit owns its native dispatch, including any remaining native KB components. */
+    public void releaseVelocity(LivingEntity victim) { pending.remove(victim.getUniqueId()); }
     private void applied(LivingEntity victim, Settings config, HitContext context, EntityKnockbackEvent knockback) {
         if (!config.classic().protectVelocityFromSync() || !(victim instanceof Player)) return;
         Hit hit = hits.get(victim.getUniqueId());

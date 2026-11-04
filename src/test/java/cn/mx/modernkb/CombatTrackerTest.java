@@ -256,6 +256,39 @@ public class CombatTrackerTest {
         when(attacker.getTicksLived()).thenReturn(11);
         assertTrue(Double.isNaN(tracker.context(victim, attacker, "ENTITY_ATTACK", false).attackCharge()));
     }
+    private void held(org.bukkit.Material material) {
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var item = mock(org.bukkit.inventory.ItemStack.class); when(item.getType()).thenReturn(material);
+        when(attacker.getInventory()).thenReturn(inventory); when(inventory.getItemInMainHand()).thenReturn(item);
+    }
+    @Test public void weaponSnapshotSurvivesListenerItemChangeButNeverLeaksToAnotherHit() {
+        held(org.bukkit.Material.MACE);
+        tracker.preAttack(new PrePlayerAttackEntityEvent(attacker, victim, true));
+        held(org.bukkit.Material.IRON_SWORD);
+        var context = tracker.context(victim, attacker, "ENTITY_ATTACK", false);
+        assertEquals("MACE", context.weapon()); assertEquals(HitType.MACE, context.type());
+        Player other = player();
+        assertEquals("IRON_SWORD", tracker.context(other, attacker, "ENTITY_ATTACK", false).weapon());
+        when(attacker.getTicksLived()).thenReturn(11);
+        assertEquals(HitType.MELEE, tracker.context(victim, attacker, "ENTITY_ATTACK", false).type());
+        held(org.bukkit.Material.DIAMOND_SPEAR);
+        assertEquals(HitType.SPEAR, tracker.context(victim, attacker, "ENTITY_ATTACK", false).type());
+    }
+    @Test public void modernItemUsesServerSprintAndDoesNotAttachHeldWeaponToProjectiles() {
+        Settings modern = settings; classic(false);
+        settings = settings.withItems(new ItemCombat(Set.of("MACE"), modern)); held(org.bukkit.Material.MACE);
+        tracker.toggleSprint(new PlayerToggleSprintEvent(attacker, true));
+        assertFalse(tracker.source(attacker, victim.getUniqueId()).sprint());
+        held(org.bukkit.Material.IRON_SWORD);
+        assertTrue(tracker.source(attacker, victim.getUniqueId()).sprint());
+        held(org.bukkit.Material.MACE);
+        AbstractArrow arrow = mock(AbstractArrow.class);
+        when(arrow.getShooter()).thenReturn(attacker); when(arrow.getUniqueId()).thenReturn(UUID.randomUUID());
+        bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(arrow)).thenReturn(true);
+        var context = tracker.context(victim, arrow, "DAMAGE", false);
+        assertEquals(HitType.ARROW, context.type()); assertEquals("", context.weapon());
+        assertFalse(settings.modernAttack(context));
+    }
     @Test public void scopedSkillsNestAndRestoreEvenWhenActionThrows() {
         tracker.withType(attacker, victim, HitType.REGULARITY, () -> {
             assertEquals(HitType.REGULARITY, tracker.context(victim, attacker, "ENTITY_ATTACK", false).type());

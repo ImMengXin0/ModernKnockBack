@@ -27,6 +27,8 @@ public final class ModeFiles {
         }
         Path combat = root.resolve("classic/combat.yml");
         if (!Files.exists(combat)) copyResource("classic/combat.yml", combat);
+        Path items = root.resolve("classic/item.yml");
+        if (!Files.exists(items)) copyResource("classic/item.yml", items);
         if (!Files.exists(root.resolve("mode.yml"))) save(CombatMode.MODERN);
     }
     private void copyResource(String resource, Path destination) throws IOException {
@@ -59,6 +61,19 @@ public final class ModeFiles {
                 drafts.add(draft); combat = ClassicSettings.read(draft.yaml());
             }
             Settings candidate = Settings.read(config.yaml(), profiles.yaml()).withMode(mode, combat);
+            if (classic) {
+                var items = ConfigCompletion.complete(directory.resolve("item.yml"), ConfigCompletion.resource("classic/item.yml"), false, true);
+                drafts.add(items);
+                var materials = ItemCombat.read(items.yaml());
+                if (!materials.isEmpty()) {
+                    // Validate all dependencies before completing any file or publishing a new snapshot.
+                    var modernConfig = ConfigCompletion.complete(root.resolve("modern/config.yml"), ConfigCompletion.resource("modern/config.yml"), false, false);
+                    var modernProfiles = ConfigCompletion.complete(root.resolve("modern/profiles.yml"), ConfigCompletion.resource("modern/profiles.yml"), true, false);
+                    Settings modern = Settings.read(modernConfig.yaml(), modernProfiles.yaml());
+                    drafts.add(modernConfig); drafts.add(modernProfiles);
+                    candidate = candidate.withItems(new ItemCombat(materials, modern));
+                }
+            }
             ConfigCompletion.saveValidated(root, drafts, report);
             return candidate;
         } catch (IOException ex) { throw new IllegalStateException("Cannot complete " + mode.key() + " configuration; previous runtime state retained", ex); }

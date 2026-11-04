@@ -328,6 +328,87 @@ public class ClassicCombatTest {
         when(victim.getInventory().getItemInMainHand()).thenReturn(item);
         return item;
     }
+    private void enableModernItems(String... names) {
+        settings = settings.withItems(new ItemCombat(Set.of(names), settings.withMode(CombatMode.MODERN, ClassicSettings.defaults())));
+    }
+    @Test public void selectedItemsRestoreNativeAttackSpeedOnHeldSwitchAndReload() {
+        axeAttributes(); enableModernItems("MACE", "DIAMOND_SPEAR");
+        var key = new NamespacedKey(plugin, "classic_attack_speed");
+        axe(Material.IRON_SWORD); classic.reconcile(victim); assertTrue(modifiers.containsKey(key));
+        var mace = mock(org.bukkit.inventory.ItemStack.class); when(mace.getType()).thenReturn(Material.MACE);
+        when(victim.getInventory().getItem(2)).thenReturn(mace);
+        classic.held(new org.bukkit.event.player.PlayerItemHeldEvent(victim, 0, 2));
+        assertFalse(modifiers.containsKey(key));
+        axe(Material.DIAMOND_SPEAR); classic.reconcile(victim); assertFalse(modifiers.containsKey(key));
+        settings = settings.withItems(new ItemCombat(Set.of(), settings.items().modern()));
+        classic.reconcile(victim); assertTrue(modifiers.containsKey(key));
+        settings = settings.withMode(CombatMode.MODERN, ClassicSettings.defaults());
+        classic.reconcile(victim); assertFalse(modifiers.containsKey(key));
+    }
+    @Test public void selectedAxeRetainsNativeDamageAndRestoresClassicWhenRemoved() {
+        var values = axeAttributes(); enableModernItems("IRON_AXE");
+        axe(Material.IRON_AXE); classic.reconcile(victim); assertTrue(values.isEmpty());
+        settings = settings.withItems(ItemCombat.empty()); classic.reconcile(victim); assertEquals(1, values.size());
+    }
+    @Test public void selectedWeaponBypassesClassicTimingAndVectorButKeepsNativeImmunity() {
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var weapon = mock(org.bukkit.inventory.ItemStack.class); when(weapon.getType()).thenReturn(Material.MACE);
+        when(attacker.getInventory()).thenReturn(inventory); when(inventory.getItemInMainHand()).thenReturn(weapon);
+        enableModernItems("MACE");
+        classic.acceptedDamage(damage());
+        assertFalse(densityClick(attacker, victim).isCancelled());
+        assertEquals(18, victim.getMaximumNoDamageTicks()); // Restore the pre-plugin value, not a hardcoded 20.
+        var hit = damage(); classic.guardDamage(hit); verify(hit, never()).setCancelled(true);
+        var context = new HitContext(victim.getUniqueId(), attacker.getUniqueId(), attacker.getUniqueId(), HitType.MACE,
+                CombatantKind.PLAYER, CombatantKind.PLAYER, "ENTITY_ATTACK", true, false, false, .2, false, "MACE");
+        var event = knockback(); assertNull(classic.calculate(event, context, KnockbackMathTest.profile(), settings));
+        assertFalse(event.isCancelled());
+        settings = settings.withItems(ItemCombat.empty());
+        classic.reconcile(victim); assertEquals(20, victim.getMaximumNoDamageTicks());
+    }
+    @Test public void selectedWeaponNeverShortensNativeImmunityViaAnIntermediateClassicValue() {
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var weapon = mock(org.bukkit.inventory.ItemStack.class); when(weapon.getType()).thenReturn(Material.MACE);
+        when(attacker.getInventory()).thenReturn(inventory); when(inventory.getItemInMainHand()).thenReturn(weapon);
+        settings = settings.withMode(CombatMode.CLASSIC, new ClassicSettings(4, 4, true, true)); enableModernItems("MACE");
+        when(victim.getNoDamageTicks()).thenReturn(18);
+        assertFalse(densityClick(attacker, victim).isCancelled());
+        assertEquals(18, victim.getMaximumNoDamageTicks());
+        verify(victim, never()).setNoDamageTicks(anyInt());
+    }
+    @Test public void rodToSelectedModernWeaponStillHonorsRodProtection() {
+        enableModernItems("MACE");
+        FishHook hook = rodHook(); rodDamage(hook, event -> {});
+        assertEquals(ClassicCombat.RodResult.APPLIED, classic.rodImpactResult(hook, attacker, victim, .4));
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var weapon = mock(org.bukkit.inventory.ItemStack.class); when(weapon.getType()).thenReturn(Material.MACE);
+        when(attacker.getInventory()).thenReturn(inventory); when(inventory.getItemInMainHand()).thenReturn(weapon);
+        assertTrue(densityClick(attacker, victim).isCancelled());
+        var early = damage(); classic.guardDamage(early); verify(early).setCancelled(true);
+        when(victim.getTicksLived()).thenReturn(110);
+        assertFalse(densityClick(attacker, victim).isCancelled());
+    }
+    @Test public void hybridImmunityKeepsElapsedTicksAcrossShortClassicAndNativeWindows() {
+        var inventory = mock(org.bukkit.inventory.PlayerInventory.class);
+        var weapon = mock(org.bukkit.inventory.ItemStack.class); when(weapon.getType()).thenReturn(Material.MACE);
+        when(attacker.getInventory()).thenReturn(inventory); when(inventory.getItemInMainHand()).thenReturn(weapon);
+        settings = settings.withMode(CombatMode.CLASSIC, new ClassicSettings(4, 4, true, true)); enableModernItems("MACE");
+        classic.reconcile(victim); assertEquals(8, immunity.get());
+        AtomicInteger remaining = new AtomicInteger(8);
+        when(victim.getNoDamageTicks()).thenAnswer(call -> remaining.get());
+        doAnswer(call -> { remaining.set(call.getArgument(0)); return null; }).when(victim).setNoDamageTicks(anyInt());
+        densityClick(attacker, victim);
+        assertEquals(18, immunity.get()); assertEquals(18, remaining.get());
+        remaining.decrementAndGet(); // One tick elapsed since the original hit.
+        for (int i = 0; i < 3; i++) {
+            classic.reconcile(victim); assertEquals(8, immunity.get()); assertEquals(7, remaining.get());
+            densityClick(attacker, victim); assertEquals(18, immunity.get()); assertEquals(17, remaining.get());
+        }
+        remaining.set(0); classic.reconcile(victim); densityClick(attacker, victim);
+        assertEquals(0, remaining.get()); // An expired window must never be revived.
+        remaining.set(200); classic.reconcile(victim); densityClick(attacker, victim);
+        assertEquals(200, remaining.get()); // Leave an unrelated long protection untouched.
+    }
     @Test public void classicAxesHave18BaseDamageAndNeverStackOrOverwriteOtherModifiers() {
         var values = axeAttributes();
         var foreignKey = new NamespacedKey("other", "strength");

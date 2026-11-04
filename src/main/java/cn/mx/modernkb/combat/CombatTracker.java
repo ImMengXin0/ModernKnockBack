@@ -16,8 +16,12 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 
 public final class CombatTracker implements Listener {
-    public record Source(UUID id, UUID attacker, CombatantKind kind, HitType type, boolean sprint, double charge) {}
-    private record Attack(UUID target, int tick, boolean sprint, double charge) {}
+    public record Source(UUID id, UUID attacker, CombatantKind kind, HitType type, boolean sprint, double charge, String weapon) {
+        public Source(UUID id, UUID attacker, CombatantKind kind, HitType type, boolean sprint, double charge) {
+            this(id, attacker, kind, type, sprint, charge, "");
+        }
+    }
+    private record Attack(UUID target, int tick, boolean sprint, double charge, String weapon) {}
     private record Damage(EntityDamageByEntityEvent event, int tick, Source source) {}
     private record Scope(UUID attacker, UUID victim, HitType type, Source source) {}
     private final Plugin plugin;
@@ -61,7 +65,7 @@ public final class CombatTracker implements Listener {
     public void preAttack(PrePlayerAttackEntityEvent event) {
         if (!settings.get().enabled() || !event.willAttack() || !owns(event.getPlayer()) || !owns(event.getAttacked())) return;
         Player p = event.getPlayer();
-        Attack value = new Attack(event.getAttacked().getUniqueId(), p.getTicksLived(), sprint(p), p.getAttackCooldown());
+        Attack value = new Attack(event.getAttacked().getUniqueId(), p.getTicksLived(), sprint(p), p.getAttackCooldown(), CombatItems.held(p));
         UUID id = p.getUniqueId();
         attacks.put(id, value);
         var cleanup = new RemoveEntryTask<>(attacks, id, value);
@@ -76,14 +80,16 @@ public final class CombatTracker implements Listener {
         }
         boolean sprint = false;
         double charge = Double.NaN;
+        String weapon = entity instanceof LivingEntity living ? CombatItems.held(living) : "";
         if (owns(attacker) && attacker instanceof Player p) {
             Attack attack = attacks.get(p.getUniqueId());
             if (attack != null && attack.tick == p.getTicksLived() && attack.target.equals(victim)) {
                 sprint = attack.sprint; charge = attack.charge;
+                if (entity == attacker) weapon = attack.weapon;
             } else sprint = sprint(p);
         }
         return new Source(entity.getUniqueId(), owns(attacker) ? attacker.getUniqueId() : null,
-                kind(attacker), HitClassifier.source(entity), sprint, charge);
+                kind(attacker), entity instanceof LivingEntity ? HitClassifier.weapon(weapon) : HitClassifier.source(entity), sprint, charge, weapon);
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void damage(EntityDamageByEntityEvent event) {
@@ -122,7 +128,7 @@ public final class CombatTracker implements Listener {
         CombatantKind victimKind = kind(victim);
         boolean preserveY = sync && type.melee() && source.kind == CombatantKind.PLAYER && victimKind == CombatantKind.PLAYER;
         return new HitContext(id, source.attacker, source.id, type, source.kind, victimKind, cause,
-                victim.isOnGround(), source.sprint, critical, source.charge, preserveY);
+                victim.isOnGround(), source.sprint, critical, source.charge, preserveY, source.weapon);
     }
     private boolean sprint(Player player) {
         boolean server = player.isSprinting();
@@ -134,7 +140,7 @@ public final class CombatTracker implements Listener {
             client = previous == null ? server : previous;
         }
         Settings config = settings.get();
-        return config.classicEnabled() && !config.classic().stopSprint() ? client : server;
+        return config.classicEnabled() && !config.modernItem(CombatItems.held(player)) && !config.classic().stopSprint() ? client : server;
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void toggleSprint(PlayerToggleSprintEvent event) {

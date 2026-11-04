@@ -17,7 +17,7 @@ public final class CombatWarmup {
         for (Class<?> root : List.of(ClassicCombat.class, CombatTracker.class, KnockbackListener.class,
                 ClassicClickDensity.class, ClassicJumpTracker.class, HitClassifier.class,
                 ClassicKnockbackMath.class, KnockbackMath.class, NativeKnockbackMath.class,
-                HitContext.class, HitType.class, CombatantKind.class, KnockbackProfileEvent.class,
+                CombatItems.class, HitContext.class, HitType.class, CombatantKind.class, KnockbackProfileEvent.class,
                 KnockbackModifyEvent.class, LeafVelocityDispatch.class, RemoveEntryTask.class)) initializeTree(root);
 
         // Bounded, pure calculations link switch/lambda call sites as well as loading their classes.

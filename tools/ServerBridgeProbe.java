@@ -16,6 +16,7 @@ public final class ServerBridgeProbe {
         verifyRodSweep();
         verifyRetainedRodContact();
         verifyAttackReach();
+        verifyModernItemEntryPoints();
         verifyClassicVelocityDelivery();
         RodVelocity.forServer();
         TeamPacketCodec codec = new TeamPacketCodec();
@@ -295,6 +296,46 @@ public final class ServerBridgeProbe {
                     "Core accepted ordinary melee beyond 3.0 without network tolerance");
         }
         System.out.println("Native reach OK: default hand/sword/axe range 3.0; 2.99 accepted, 3.01 rejected with zero tolerance");
+    }
+
+    private static void verifyModernItemEntryPoints() {
+        for (var item : List.of(net.minecraft.world.item.Items.WOODEN_SPEAR, net.minecraft.world.item.Items.STONE_SPEAR,
+                net.minecraft.world.item.Items.COPPER_SPEAR, net.minecraft.world.item.Items.IRON_SPEAR,
+                net.minecraft.world.item.Items.GOLDEN_SPEAR, net.minecraft.world.item.Items.DIAMOND_SPEAR,
+                net.minecraft.world.item.Items.NETHERITE_SPEAR)) {
+            var stack = new net.minecraft.world.item.ItemStack(item);
+            require(stack.has(net.minecraft.core.component.DataComponents.KINETIC_WEAPON)
+                    && stack.has(net.minecraft.core.component.DataComponents.PIERCING_WEAPON)
+                    && stack.has(net.minecraft.core.component.DataComponents.ATTACK_RANGE),
+                    "Spear is missing native kinetic, piercing or attack range components: " + item);
+        }
+        var player = Mockito.mock(net.minecraft.server.level.ServerPlayer.class);
+        var target = Mockito.mock(net.minecraft.server.level.ServerPlayer.class);
+        var craftPlayer = Mockito.mock(org.bukkit.craftbukkit.entity.CraftPlayer.class);
+        var craftTarget = Mockito.mock(org.bukkit.craftbukkit.entity.CraftPlayer.class);
+        Mockito.when(player.getBukkitEntity()).thenReturn(craftPlayer);
+        Mockito.when(target.getBukkitEntity()).thenReturn(craftTarget);
+        Mockito.when(target.isAttackable()).thenReturn(true);
+        Mockito.doCallRealMethod().when(player).attack(target);
+        Mockito.doCallRealMethod().when(player).stabAttack(Mockito.any(), Mockito.eq(target),
+                Mockito.anyFloat(), Mockito.anyBoolean(), Mockito.anyBoolean(), Mockito.anyBoolean());
+        var manager = Mockito.mock(org.bukkit.plugin.PluginManager.class);
+        var attempts = new ArrayList<io.papermc.paper.event.player.PrePlayerAttackEntityEvent>();
+        Mockito.doAnswer(call -> {
+            var event = (io.papermc.paper.event.player.PrePlayerAttackEntityEvent) call.getArgument(0);
+            require(event.getPlayer() == craftPlayer && event.getAttacked() == craftTarget && event.willAttack(),
+                    "Native pre-attack has incorrect source/target/eligibility");
+            attempts.add(event); event.setCancelled(true); return null;
+        }).when(manager).callEvent(Mockito.any());
+        try (var bukkit = Mockito.mockStatic(org.bukkit.Bukkit.class)) {
+            bukkit.when(org.bukkit.Bukkit::getPluginManager).thenReturn(manager);
+            player.attack(target);
+            player.stabAttack(net.minecraft.world.entity.EquipmentSlot.MAINHAND, target, 4, true, true, false);
+        }
+        require(attempts.size() == 2, "Ordinary attack or spear stab skipped the early pre-attack event");
+        Mockito.verify(player, Mockito.never()).getWeaponItem();
+        Mockito.verify(player, Mockito.never()).getItemBySlot(Mockito.any());
+        System.out.println("Native modern item entry points OK: all seven spear components; melee and stab pre-attack before weapon/damage evaluation (cancelled offline probe)");
     }
 
     private static void verifyClassicVelocityDelivery() throws Exception {

@@ -1,10 +1,10 @@
 # 配置自动补全
 
-替换 Jar 并正常重启即可为当前模式补齐缺失配置，升级无需手工粘贴新增字段。/kbtest classic、/kbtest modern 会补全目标模式，/mkb reload 或 /kbtest reload 会补全当前模式。未加载的另一模式保持原文件，加载时再补全。
+替换 Jar 并正常重启即可为当前模式补齐缺失配置，升级无需手工粘贴新增字段。/kbtest classic、/kbtest modern 会补全目标模式，/mkb reload 或 /kbtest reload 会补全当前模式。Classic 的 `item.yml` 列表非空时，Modern 配置也作为依赖一并校验及补全；除此以外，未加载的另一模式保持原文件。
 
 ## 文件与规则
 
-补全模式目录下的 config.yml、profiles.yml，以及 classic/combat.yml；缺失整个文件也会恢复。mode.yml 缺少选择时补为modern。players.yml 和升级前留在根目录的旧 config/profiles 不参与补全，玩家分配及排除状态不变。
+补全模式目录下的 config.yml、profiles.yml，以及 classic/combat.yml、classic/item.yml；缺失整个文件也会恢复。item.yml 只补缺失的 `modern-items` 键，不向已有列表追加物品，`[]` 保留为空。mode.yml 缺少选择时补为modern。players.yml 和升级前留在根目录的旧 config/profiles 不参与补全，玩家分配及排除状态不变。
 
 配置模板来自当前 Jar 内置资源。缺失或空项补入模板值，已有非空值优先，包括0、false和自定义数值；未知字段、错误类型、非法范围、错误路由和无法解析的 YAML 仍按原来的严格校验报错。补全不会以默认值掩盖这些错误。
 

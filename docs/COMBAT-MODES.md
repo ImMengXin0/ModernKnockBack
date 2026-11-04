@@ -12,6 +12,7 @@ plugins/ModernKnockBack/
     config.yml             # 玩家、Bot、弓箭、鱼竿与对战路由
     profiles.yml           # 基础速度、动量、疾跑、附魔、鱼竿
     combat.yml             # 受击间隔、旧版命中反馈、横扫、疾跑/跳跃重置与 CPS 密度
+    item.yml               # 主手物品的现代攻击例外，默认全部长矛及重锤
   modern/
     config.yml             # 高版本路由及 KnockbackSync 策略
     profiles.yml           # 高版本增量/native 向量及鱼竿参数
@@ -19,7 +20,7 @@ plugins/ModernKnockBack/
 
 首次升级将数据目录根部的 config.yml、profiles.yml 复制到缺失的 modern 同名文件，保留已有调参；原文件保留，此后实际读取模式目录。classic 缺失文件自动生成，已存在的文件不覆盖。全新安装默认 modern，采用 responsive-pvp 起点。源码中的配置模板统一位于 src/main/resources/classic/ 和 src/main/resources/modern/，服务器实际使用 plugins/ModernKnockBack/ 内的模式目录。
 
-启动读取当前模式、切换读取目标模式以及重载当前模式时，自动补齐 config.yml、profiles.yml、classic/combat.yml 中缺失的内置项。已有值、个人分配和自定义 profile 保留；普通 profile 继续继承 defaults，classic 的 fishing_rod 补出独立段并保留原有显式继承值。校验整套候选配置通过后再备份、写回，原文备份在 backups/。无缺项时不写文件；坏配置仍拒绝。详见 [自动补全规则](CONFIG-COMPLETION.md)。
+启动读取当前模式、切换读取目标模式以及重载当前模式时，自动补齐 config.yml、profiles.yml、classic/combat.yml、classic/item.yml 中缺失的内置项。Classic 的物品例外非空时，也同时加载 Modern 配置作为依赖。已有值、个人分配和自定义 profile 保留；普通 profile 继续继承 defaults，classic 的 fishing_rod 补出独立段并保留原有显式继承值。校验整套候选配置通过后再备份、写回，原文备份在 backups/。无缺项时不写文件；坏配置仍拒绝。详见 [自动补全规则](CONFIG-COMPLETION.md)。
 
 切换前校验目标目录、路由及已分配的玩家 profile；校验或模式保存失败不切换。自定义且已分配的 profile 需要在两套 profiles.yml 中都存在。players.yml 共用，升级无需清空。配置损坏不会自动覆盖为默认值。
 
@@ -30,6 +31,8 @@ plugins/ModernKnockBack/
 `legacy-hit-effects: true` 默认减少现代伤害指示粒子及攻击附加音效，保留受击变红、受伤声、挥手和暴击/附魔粒子。仅控制接收端视听效果，支持重载和自动补全；KB、伤害、免疫窗口和客户端模型渲染不由此开关更改，详见 [观感说明](CLASSIC-FEEL.md)。
 
 玩家使用本插件命名空间下的临时 ATTACK_SPEED +1024 属性，令高版本原生伤害及疾跑资格不再等待蓄力。不会覆盖基础值或装备 modifier，换武器也无需重写基础属性。核心按半 tick 采样攻击蓄力，该速度使采样满蓄力；无需取消正常伤害再 damage() 补造一次攻击。
+
+2.4.1 的 `classic/item.yml` 可指定例外：默认长矛及重锤主手攻击恢复原生冷却和武器机制，KB 使用 Modern 参数。例外命中跳过 Classic 无冷却、受击间隔拦截、向量合并及技巧减退；鱼竿接武器保护、全局互推与视听规则仍保留，详见 [物品例外](ITEM-COMBAT.md)。
 
 2.3.0 新增 `legacy-axe-damage: true`，默认在 classic 中使用 1.8 斧头基础伤害。标准玩家基础攻击力为 1 时，木/金、石、铁、钻石斧的基础总伤害依次为 4、5、6、7 点。通过插件自己的临时攻击属性修正，在原生计算暴击、力量、附魔、护甲之前生效；不改写物品或其他插件的基础属性。切换武器、关闭开关、切回 modern、排除玩家或正常停用时移除自身修正。铜/下界合金斧及显式带自定义攻击伤害属性的物品保留原值，详见 [发布说明](RELEASE-2.3.0.md)。
 
@@ -80,7 +83,7 @@ Paper delta = finalVelocity - beforeVelocity
 
 高版本一次攻击可能先生成伤害 KB，再生成疾跑/附魔 KB。classic 将附加值合进第一条完整向量，取消后续重复组件。仅最终未取消的 KB 事件提交去重标记；被其他插件取消的组件不会消耗向量。被取消伤害、过期记录、模式变化不会重放速度。现代路径仍处理每一个现代原生增量组件。
 
-玩家和 Bot 独立路由，默认使用相同数值；Bot 在受击时设置对应免疫时间，不依赖 PlayerVelocityEvent 来生成 KB。classic 重锤和长矛的近战 KB 使用经典向量，但武器伤害、特殊使用方式、盾牌、装备等仍由高版本服务器负责。爆炸、风弹、三叉戟特殊机制沿用事件增量路径。这是经典攻击节奏和 KB 模拟，不能将整个 1.21.11 客户端及战斗系统完全还原成 1.8。
+玩家和 Bot 独立路由，默认使用相同数值；Bot 在受击时设置对应免疫时间，不依赖 PlayerVelocityEvent 来生成 KB。2.4.1 起默认重锤和长矛已列入现代物品例外，近战 KB 读取 Modern；从列表移除后恢复经典向量。武器伤害、特殊使用方式、盾牌、装备等仍由高版本服务器负责。爆炸、风弹、三叉戟特殊机制沿用事件增量路径。这是经典攻击节奏和 KB 模拟，不能将整个 1.21.11 客户端及战斗系统完全还原成 1.8。
 
 切回 modern、排除玩家或玩家退出时，只移除本插件攻速 modifier，并恢复进入 classic 前保存的 maximumNoDamageTicks。若别的插件后来修改了该值，则不覆盖。原始免疫值用 PDC 保存，攻速 modifier 不写入实体存档，重启及重新加入可恢复。Folia 的属性操作在实体所属区域执行；禁用阶段无法直接恢复其他区域实体，正常重启后的实体加载/玩家加入会回收状态。
 

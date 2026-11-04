@@ -40,13 +40,21 @@ public final class KnockbackListener implements Listener {
         HitContext context = tracker.context(victim,
                 event instanceof EntityPushedByEntityAttackEvent attack ? attack.getPushedBy() : null,
                 event.getCause().name(), config.mode() == CombatMode.MODERN && config.preserveSyncY() && sync.getAsBoolean());
+        Settings combat = config.combatSettings(context);
+        boolean modernItem = combat != config;
+        if (modernItem) {
+            if (classic != null) classic.releaseVelocity(victim);
+            if (!combat.enabled()) return;
+            context = context.withSyncVertical(combat.preserveSyncY() && sync.getAsBoolean() && context.type().melee()
+                    && context.attackerKind() == CombatantKind.PLAYER && context.victimKind() == CombatantKind.PLAYER);
+        }
         Vector original = event.getKnockback();
         if (!KnockbackMath.finite(original)) return;
-        KnockbackProfileEvent selection = new KnockbackProfileEvent(context, config.select(context, preference.profile()), config.mode());
+        KnockbackProfileEvent selection = new KnockbackProfileEvent(context, combat.select(context, preference.profile()), combat.mode());
         Bukkit.getPluginManager().callEvent(selection);
-        KnockbackProfile profile = config.profiles().get(selection.getProfile());
+        KnockbackProfile profile = combat.profiles().get(selection.getProfile());
         if (selection.isCancelled() || profile == null || !profile.enabled()) return;
-        ClassicCombat.Calculation legacy = classic == null ? null : classic.calculate(event, context, profile, config);
+        ClassicCombat.Calculation legacy = classic == null || modernItem ? null : classic.calculate(event, context, profile, config);
         if (event.isCancelled()) return;
         NativeKnockbackMath.Result calculation;
         if (legacy != null) calculation = new NativeKnockbackMath.Result(legacy.impulse(), false, "classic-vector");
@@ -58,7 +66,7 @@ public final class KnockbackListener implements Listener {
             } else calculation = NativeKnockbackMath.fallback(original, context, profile, "unsupported-event");
         } else calculation = NativeKnockbackMath.fallback(original, context, profile, "");
         var modification = new KnockbackModifyEvent(context, selection.getProfile(), original, calculation.impulse(),
-                calculation.nativeApplied(), calculation.fallbackReason(), config.mode());
+                calculation.nativeApplied(), calculation.fallbackReason(), combat.mode());
         Bukkit.getPluginManager().callEvent(modification);
         if (modification.isCancelled() || event.isCancelled() || settings.get() != config) return;
         Vector result = modification.getImpulse();

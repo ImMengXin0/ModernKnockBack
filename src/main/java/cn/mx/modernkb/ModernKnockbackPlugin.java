@@ -143,13 +143,18 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
                 sender.sendMessage("KnockbackSync: " + sync.status() + " | policy=" + (settings.preserveSyncY() ? "preserve-y" : "before-sync"));
                 sender.sendMessage("Classic vectors=" + classic.applied() + " | blocked early hits=" + classic.preventedHits()
                         + " | deduplicated KB components=" + classic.preventedComponents());
-                if (settings.classicEnabled()) sender.sendMessage("Classic: no attack charge | hit interval=" + settings.classic().hitIntervalTicks()
+                if (settings.classicEnabled()) {
+                    sender.sendMessage("Classic: no attack charge (except modern items) | hit interval=" + settings.classic().hitIntervalTicks()
                         + " ticks | rod interval=" + settings.classic().effectiveRodHitTicks()
                         + " ticks | rod to sword=" + settings.classic().effectiveRodMeleeTicks() + " ticks | velocity protection=" + settings.classic().protectVelocityFromSync()
                         + " | stop_sprint=" + settings.classic().stopSprint() + " | jump reset=" + settings.classic().jumpResetEnabled()
                         + "/" + settings.classic().jumpResetWindowTicks() + " ticks | click density=" + settings.classic().clickDensityEnabled()
                         + " (max 20%) | legacy hit effects=" + settings.classic().legacyHitEffects()
                         + " | targeting=native | rod margin=0.3 | player pushing=off");
+                    sender.sendMessage("Modern item exceptions=" + settings.items().modernItems().size()
+                            + " | file=classic/item.yml | KB=modern/ | policy="
+                            + (settings.items().modern() == null ? "inactive" : settings.items().modern().preserveSyncY() ? "preserve-y" : "before-sync"));
+                }
             } else if (args[0].equalsIgnoreCase("list") && args.length == 1) {
                 sender.sendMessage(String.join(", ", new TreeSet<>(profiles())));
             } else if (args[0].equalsIgnoreCase("view") && args.length == 2) {

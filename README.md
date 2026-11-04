@@ -1,4 +1,4 @@
-# ModernKnockBack 2.4.0
+# ModernKnockBack 2.4.1
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -6,6 +6,7 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 - `/kbtest classic|modern` 切换经典无蓄力攻击/旧版向量与现代战斗，保存模式并在重启后继续使用。
 - `classic/` 和 `modern/` 独立配置目录，升级自动迁移已有现代配置。
+- Classic 的 `classic/item.yml` 支持指定主手物品使用高版本原生攻击与 Modern KB，默认全部 7 种长矛及重锤，支持 reload，见 [物品例外](docs/ITEM-COMBAT.md)。
 - 启动、切换模式及重载时自动补全当前模式缺失配置；保留已配置数值、旧字段与自定义 profile，修改前自动备份。
 - classic 的 `classic/combat.yml` 新增 `legacy-axe-damage: true`（升级自动补全）：木/金、石、铁、钻石斧按 1.8 基础总伤害 4、5、6、7 计算，暴击、力量、附魔及护甲仍由原版计算。切换武器、modern 模式、排除玩家及停用时恢复；铜/下界合金斧与显式自定义攻击属性的物品保留原值。
 - classic 默认只列出 5 个主要 KB 参数；相同命中状态覆盖旧动量，疾跑推力统一方向，关闭默认高度锁定。
@@ -29,7 +30,9 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.4.0.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.4.1.jar`。
+
+2.4.1 新增 Classic 物品例外：白名单主手武器恢复原生冷却、疾跑资格和武器机制；击退从 `modern/` 对应路由读取，跳过 Classic 向量、CPS 减退及重复组件合并。`/mkb reload` 同时校验列表与依赖的 Modern 配置；鱼竿接武器保护和 Classic 全局碰撞/视听规则继续生效。
 
 2.4.0 将 Leaf 速度派发识别和受击包改写的首次初始化提前到插件启动，减少重启后全服第一击的服务端初始化开销。预初始化只处理内存对象，不发送受击或速度包；详见 [首次击退审查](docs/FIRST-HIT.md)。
 
