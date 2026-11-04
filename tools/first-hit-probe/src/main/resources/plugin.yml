@@ -1,0 +1,8 @@
+name: FirstHitQA
+version: '1.0'
+main: fairy.kbvote.qa.FirstHitQA
+api-version: '1.21.11'
+softdepend: [ModernKnockBack]
+commands:
+  firsthit:
+    description: Dedicated loopback-only timing probe; never install on production

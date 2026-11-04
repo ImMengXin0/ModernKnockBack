@@ -6,6 +6,7 @@ import cn.mx.modernkb.compat.SyncCompatibility;
 import cn.mx.modernkb.compat.RodVelocity;
 import cn.mx.modernkb.compat.RodCollision;
 import cn.mx.modernkb.compat.ClientCollisions;
+import cn.mx.modernkb.compat.LeafVelocityDispatch;
 import cn.mx.modernkb.config.*;
 import cn.mx.modernkb.rod.RodListener;
 import java.io.IOException;
@@ -44,8 +45,10 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
             settings = modes.load(modes.selected());
             players = new PlayerStore(getDataPath().resolve("players.yml"));
             validateAssignments(settings);
+            CombatWarmup.prepare(settings.profiles().get("default"));
             tracker = new CombatTracker(this, () -> settings);
             sync = new SyncCompatibility(); sync.refresh();
+            LeafVelocityDispatch.initialize();
             classic = new ClassicCombat(this, () -> settings, players, tracker, RodVelocity.forServer());
             pushing = new PlayerPushRules(this, () -> settings, players);
             collisions = new ClientCollisions(this, () -> settings, players);

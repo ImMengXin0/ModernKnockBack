@@ -32,6 +32,7 @@ final class TeamPacketCodec {
     private final List<Method[]> copies = new ArrayList<>();
     private final ClassicEffectFilter effects = new ClassicEffectFilter();
     private final HurtAnimationFilter hurtAnimation = new HurtAnimationFilter();
+    private final VelocityPacketClassifier velocityPackets = new VelocityPacketClassifier();
 
     TeamPacketCodec() throws ReflectiveOperationException {
         packetConstructor.setAccessible(true); method.setAccessible(true);
@@ -47,6 +48,9 @@ final class TeamPacketCodec {
     }
     Channel channel(Player player) throws ReflectiveOperationException {
         return (Channel) channel.get(connection.get(listener.get(handle.invoke(player))));
+    }
+    boolean requiresVelocityFlush(Object message, int selfEntityId) throws ReflectiveOperationException {
+        return velocityPackets.requiresFlush(message, selfEntityId);
     }
     List<Object> snapshot(Player player) throws ReflectiveOperationException {
         var result = new ArrayList<Object>();

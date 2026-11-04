@@ -11,6 +11,7 @@ public final class ServerBridgeProbe {
     public static void main(String[] args) throws Exception {
         Class.forName("net.minecraft.SharedConstants").getMethod("tryDetectVersion").invoke(null);
         Class.forName("net.minecraft.server.Bootstrap").getMethod("bootStrap").invoke(null);
+        verifyDispatchInitialization();
         verifyProjectileCollision();
         verifyRodSweep();
         verifyRetainedRodContact();
@@ -70,7 +71,91 @@ public final class ServerBridgeProbe {
         verifySweepEffects(codec, original);
         verifyLegacyHitEffects(codec);
         verifyHurtAnimation(codec, original);
+        verifyTimelyVelocity(codec);
         System.out.println("Native bridge probe OK (no running server / no client PvP test)");
+    }
+    private static void verifyTimelyVelocity(TeamPacketCodec codec) throws Exception {
+        for (boolean classic : new boolean[]{false, true}) {
+            var view = new java.util.concurrent.atomic.AtomicReference<>(new ClientCollisions.View(classic, true, true));
+            var state = new CollisionTeams<Object>("Alice", "mkb_network", codec.noCollision(null), codec::noCollision);
+            var channel = new EmbeddedChannel();
+            var overlay = new ClientCollisions.Overlay(channel, state, codec,
+                    warning -> { throw new IllegalStateException(warning); }, 42, view::get);
+            channel.pipeline().addLast("overlay", overlay);
+            overlay.refresh(); channel.runPendingTasks();
+            while (channel.readOutbound() != null) { }
+            var self = new net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket(42,
+                    new net.minecraft.world.phys.Vec3(.5274, .361375, -.3));
+            var other = new net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket(43,
+                    new net.minecraft.world.phys.Vec3(.1, .2, .3));
+            var waiting = channel.write(other);
+            require(!waiting.isDone() && channel.readOutbound() == null, "Other entity velocity forced a flush");
+            var sent = channel.write(self);
+            require(waiting.isSuccess() && sent.isSuccess(), "Own velocity still waits for tick-end flush");
+            require(channel.readOutbound() == other && channel.readOutbound() == self && channel.readOutbound() == null,
+                    "Timely velocity changed packet identity/order or duplicated an impulse");
+            var hurt = new net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket(42, 75f);
+            var bundle = new net.minecraft.network.protocol.game.ClientboundBundlePacket(List.of(hurt, self, other));
+            sent = channel.write(bundle);
+            require(sent.isSuccess(), "Bundled velocity was not flushed");
+            var delivered = (net.minecraft.network.protocol.game.ClientboundBundlePacket) channel.readOutbound();
+            var children = new ArrayList<Object>(); delivered.subPackets().forEach(children::add);
+            require(children.size() == 3 && children.get(1) == self && children.get(2) == other
+                    && ((net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket) children.getFirst()).yaw() == (classic ? 0f : 75f)
+                    && channel.readOutbound() == null, "Velocity flush broke bundle/effect order");
+            var explosion = new net.minecraft.network.protocol.game.ClientboundExplodePacket(
+                    net.minecraft.world.phys.Vec3.ZERO, 1f, 0, Optional.of(new net.minecraft.world.phys.Vec3(.1, .2, .3)),
+                    net.minecraft.core.particles.ParticleTypes.EXPLOSION,
+                    net.minecraft.sounds.SoundEvents.GENERIC_EXPLODE,
+                    net.minecraft.util.random.WeightedList.of());
+            sent = channel.write(explosion);
+            require(sent.isSuccess() && channel.readOutbound() == explosion && channel.readOutbound() == null,
+                    "Recipient explosion did not flush intact");
+            view.set(new ClientCollisions.View(false, true, false)); overlay.refresh(); channel.runPendingTasks();
+            while (channel.readOutbound() != null) { }
+            waiting = channel.write(self);
+            require(!waiting.isDone() && channel.readOutbound() == null, "Excluded/disabled connection still forced a flush");
+            channel.flush(); require(channel.readOutbound() == self, "Inactive connection lost a velocity");
+            overlay.remove(); channel.runPendingTasks();
+            while (channel.readOutbound() != null) { }
+            waiting = channel.write(self);
+            require(!waiting.isDone() && channel.readOutbound() == null, "Removal left timely flush installed");
+            channel.flush(); require(channel.readOutbound() == self && channel.readOutbound() == null, "Removal lost/duplicated velocity");
+            channel.finishAndReleaseAll();
+        }
+        System.out.println("Native timely velocity OK: both modes, single ordered delivery, bundles, explosions, opt-out and removal; no real network impairment test");
+    }
+    private static void verifyDispatchInitialization() throws Exception {
+        Field option = null;
+        boolean previous = false;
+        try {
+            option = Class.forName("org.dreeam.leaf.config.modules.gameplay.Knockback").getField("flushKnockback");
+            previous = option.getBoolean(null);
+            option.setBoolean(null, false);
+        } catch (ClassNotFoundException ignored) { }
+        try {
+            // Matches startup: no connected player, world, packet transport or combat event.
+            var warmupProfile = cn.mx.modernkb.config.KnockbackProfile.read(new org.bukkit.configuration.file.YamlConfiguration());
+            cn.mx.modernkb.combat.CombatWarmup.prepare(warmupProfile);
+            cn.mx.modernkb.combat.CombatWarmup.prepare(warmupProfile);
+            LeafVelocityDispatch.initialize();
+            LeafVelocityDispatch.initialize();
+            require(LeafVelocityDispatch.stage() == LeafVelocityDispatch.Stage.NONE,
+                    "Startup initialization incorrectly installed an active melee stage");
+            if (option != null) {
+                require(!option.getBoolean(null), "Initialization changed the core flush setting");
+                option.setBoolean(null, true);
+                require(LeafVelocityDispatch.stage() == LeafVelocityDispatch.Stage.NONE,
+                        "Enabling the core option fabricated a melee call stack");
+                LeafVelocityDispatch.initialize();
+                require(option.getBoolean(null), "Repeated initialization changed the enabled core setting");
+            }
+        } finally {
+            if (option != null) option.setBoolean(null, previous);
+        }
+        // verifyClassicVelocityDelivery below checks both real native dispatches after
+        // initializing with the option OFF, then switching it ON (no cached option).
+        System.out.println("Native startup initialization OK: no player/transport, repeatable, core option preserved; dispatch regression follows");
     }
     private static void verifyProjectileCollision() throws Exception {
         Class<?> entity = Class.forName("net.minecraft.world.entity.Entity");

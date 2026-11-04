@@ -2,3 +2,5 @@
 /dist/
 /.idea/
 *.iml
+/tools/first-hit-probe/target/
+/tools/first-hit-probe/node_modules/

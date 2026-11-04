@@ -12,6 +12,14 @@ public final class LeafVelocityDispatch {
 
     private LeafVelocityDispatch() {}
 
+    /** Resolve the optional core bridge and link stack walking before any player's first hit. */
+    public static void initialize() {
+        stage();
+        // Also prepare this branch when Leaf's option is currently off or Leaf is absent.
+        // Do not cache the option: a later core configuration reload must still take effect.
+        inspectStack();
+    }
+
     public static Stage stage() {
         if (FLUSH == null) return Stage.NONE;
         try {
@@ -19,6 +27,10 @@ public final class LeafVelocityDispatch {
         } catch (IllegalAccessException | RuntimeException ignored) {
             return Stage.NONE;
         }
+        return inspectStack();
+    }
+
+    private static Stage inspectStack() {
         return STACK.walk(frames -> {
             var calls = frames.iterator();
             while (calls.hasNext()) {

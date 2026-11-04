@@ -18,6 +18,9 @@ final class HurtAnimationFilter {
         constructor = packet.getConstructor(int.class, float.class);
         id = packet.getMethod("id");
         yaw = packet.getMethod("yaw");
+        // Resolving Method objects alone leaves their first invocation on the Netty thread.
+        // Exercise the real copy path at enable with an in-memory packet; nothing is sent.
+        transform(constructor.newInstance(0, 90f), 0);
     }
 
     Object transform(Object value, int selfEntityId) throws ReflectiveOperationException {

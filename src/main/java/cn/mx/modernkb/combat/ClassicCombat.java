@@ -9,10 +9,13 @@ import com.destroystokyo.paper.event.player.PlayerJumpEvent;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.event.entity.EntityPushedByEntityAttackEvent;
 import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
@@ -64,6 +67,49 @@ public final class ClassicCombat implements Listener {
     }
     private record Prepared(Settings settings, HitContext context, Calculation calculation) {}
     public record Calculation(Vector impulse, Runnable commit) {}
+    // Explicit callbacks can be initialized at enable, without scheduling a fake hit or
+    // linking new capturing-lambda call sites inside the first real combat event.
+    private final class HitCommit implements Runnable {
+        private final boolean scopedRod;
+        private final RodScope rod;
+        private final UUID id;
+        private final Hit accepted;
+        private final Settings config;
+        private final int now;
+        private final ClassicKnockbackMath.Attack attack;
+        private final LivingEntity victim;
+        HitCommit(boolean scopedRod, RodScope rod, UUID id, Hit accepted, Settings config,
+                  int now, ClassicKnockbackMath.Attack attack, LivingEntity victim) {
+            this.scopedRod = scopedRod; this.rod = rod; this.id = id; this.accepted = accepted;
+            this.config = config; this.now = now; this.attack = attack; this.victim = victim;
+        }
+        @Override public void run() {
+            if (scopedRod) {
+                rod.applied = true;
+                Hit damageHit = hits.get(id);
+                if (damageHit != null && damageHit.damage == rod.damage) damageHit.applied = true;
+            } else {
+                if (accepted != null) accepted.applied = true;
+                else {
+                    Hit synthetic = new Hit(config, now, null, attack); synthetic.applied = true; hits.put(id, synthetic);
+                    var cleanup = new RemoveEntryTask<>(hits, id, synthetic);
+                    victim.getScheduler().runDelayed(plugin, cleanup, cleanup, config.classic().hitIntervalTicks() + 1L);
+                }
+            }
+            applied.increment();
+        }
+    }
+    private final class PendingExpiry implements Consumer<ScheduledTask>, Runnable, BiFunction<UUID, Pending, Pending> {
+        private final UUID id;
+        private final Pending expected;
+        PendingExpiry(UUID id, Pending expected) { this.id = id; this.expected = expected; }
+        @Override public void accept(ScheduledTask ignored) { run(); }
+        @Override public void run() { pending.computeIfPresent(id, this); }
+        @Override public Pending apply(UUID ignored, Pending current) {
+            // Leaf's follow-up shares a generation. A newer hit must never be removed.
+            return current.generation == expected.generation ? null : current;
+        }
+    }
     private final Plugin plugin;
     private final Supplier<Settings> settings;
     private final PlayerStore players;
@@ -132,15 +178,18 @@ public final class ClassicCombat implements Listener {
         if (damage == null) return;
         double adjustment = 0;
         if (item != null) {
-            var meta = item.getItemMeta();
-            // Explicit custom weapon attributes belong to their supplying plugin.
-            if (meta == null || meta.getAttributeModifiers(Attribute.ATTACK_DAMAGE) == null)
-                adjustment = switch (item.getType()) {
-                    case WOODEN_AXE, GOLDEN_AXE, IRON_AXE -> -3;
-                    case STONE_AXE -> -4;
-                    case DIAMOND_AXE -> -2;
-                    default -> 0; // Copper/netherite did not exist in 1.8.
-                };
+            adjustment = switch (item.getType()) {
+                case WOODEN_AXE, GOLDEN_AXE, IRON_AXE -> -3;
+                case STONE_AXE -> -4;
+                case DIAMOND_AXE -> -2;
+                default -> 0; // Copper/netherite did not exist in 1.8.
+            };
+            // Non-axes never need item-meta cloning/attribute inspection on every hit.
+            if (adjustment != 0) {
+                var meta = item.getItemMeta();
+                // Explicit custom weapon attributes belong to their supplying plugin.
+                if (meta != null && meta.getAttributeModifiers(Attribute.ATTACK_DAMAGE) != null) adjustment = 0;
+            }
         }
         var previous = damage.getModifier(axeKey);
         if (previous != null && previous.getAmount() == adjustment) return;
@@ -293,8 +342,8 @@ public final class ClassicCombat implements Listener {
     private void recordHit(LivingEntity victim, Hit value) {
         hits.put(victim.getUniqueId(), value);
         // No final vector survives beyond this tick. Timing state is removed after the immunity window.
-        victim.getScheduler().runDelayed(plugin, task -> hits.remove(victim.getUniqueId(), value),
-                () -> hits.remove(victim.getUniqueId(), value), value.settings.classic().hitIntervalTicks() + 1L);
+        var cleanup = new RemoveEntryTask<>(hits, victim.getUniqueId(), value);
+        victim.getScheduler().runDelayed(plugin, cleanup, cleanup, value.settings.classic().hitIntervalTicks() + 1L);
     }
     private ClassicKnockbackMath.Attack snapshot(Entity source, LivingEntity victim, boolean sprint, double strength) {
         Vector direction = new Vector(), facing = new Vector(1, 0, 0);
@@ -352,22 +401,7 @@ public final class ClassicCombat implements Listener {
                 ? clickDensity.reduction(id, now, config) : 0;
         Vector impulse = ClassicKnockbackMath.impulse(before, context, profile, attack,
                 resistance == null ? 0 : resistance.getValue(), limited, jumpReset, densityReduction);
-        Hit accepted = hit;
-        ClassicKnockbackMath.Attack captured = attack;
-        return new Calculation(impulse, () -> {
-            if (scopedRod) {
-                rod.applied = true;
-                Hit damageHit = hits.get(id);
-                if (damageHit != null && damageHit.damage == rod.damage) damageHit.applied = true;
-            } else {
-                if (accepted != null) accepted.applied = true;
-                else {
-                    Hit synthetic = new Hit(config, now, null, captured); synthetic.applied = true; hits.put(id, synthetic);
-                    victim.getScheduler().runDelayed(plugin, task -> hits.remove(id, synthetic), () -> hits.remove(id, synthetic), config.classic().hitIntervalTicks() + 1L);
-                }
-            }
-            applied.increment();
-        });
+        return new Calculation(impulse, new HitCommit(scopedRod, rod, id, hit, config, now, attack, victim));
     }
     private boolean isJumpReset(LivingEntity victim, HitContext context, Vector before, int window) {
         if (!(victim instanceof Player player) || !trackJump(player, settings.get())
@@ -391,7 +425,11 @@ public final class ClassicCombat implements Listener {
         UUID id = victim.getUniqueId();
         double y = victim.getLocation().getY();
         if (victim.isOnGround()) { grounds.put(id, new Ground(y, false)); return false; }
-        Ground ground = grounds.computeIfAbsent(id, key -> new Ground(y, false));
+        Ground ground = grounds.get(id);
+        if (ground == null) {
+            Ground initial = new Ground(y, false), previous = grounds.putIfAbsent(id, initial);
+            ground = previous == null ? initial : previous;
+        }
         boolean limited = ground.limited || y - ground.y > profile.classic().maxHeight();
         if (limited != ground.limited) grounds.put(id, new Ground(ground.y, limited));
         return limited;
@@ -410,12 +448,8 @@ public final class ClassicCombat implements Listener {
         Pending value = new Pending(config, victim.getTicksLived(), damage, knockback, rod, false, new Object());
         UUID id = victim.getUniqueId();
         pending.put(id, value);
-        victim.getScheduler().runDelayed(plugin, task -> expirePending(id, value),
-                () -> expirePending(id, value), rod ? 2 : 1);
-    }
-    private void expirePending(UUID id, Pending expected) {
-        // The one Leaf follow-up shares this generation; a newer hit always has another one.
-        pending.computeIfPresent(id, (key, value) -> value.generation == expected.generation ? null : value);
+        var cleanup = new PendingExpiry(id, value);
+        victim.getScheduler().runDelayed(plugin, cleanup, cleanup, rod ? 2 : 1);
     }
     private boolean valid(Pending value, Player victim) {
         return value.settings == settings.get() && value.settings.classicEnabled()

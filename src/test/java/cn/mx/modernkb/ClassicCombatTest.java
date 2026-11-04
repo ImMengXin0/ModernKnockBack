@@ -377,6 +377,15 @@ public class ClassicCombatTest {
                 new ClassicSettings(10, 10, true, true, false, true, 2, 10, true, true, false));
         classic.reconcile(victim); assertTrue(values.isEmpty());
     }
+    @Test public void nonAxesRestoreOldModifierWithoutInspectingItemMeta() {
+        var values = axeAttributes();
+        axe(org.bukkit.Material.IRON_AXE); classic.reconcile(victim); assertEquals(1, values.size());
+        for (var material : new org.bukkit.Material[]{org.bukkit.Material.IRON_SWORD, org.bukkit.Material.AIR,
+                org.bukkit.Material.NETHERITE_AXE, org.bukkit.Material.COPPER_AXE}) {
+            var item = axe(material); classic.reconcile(victim);
+            assertTrue(values.isEmpty()); verify(item, never()).getItemMeta();
+        }
+    }
     @Test public void switchBackRestoresOriginalImmunityAndRemovesOnlyOwnedModifier() {
         classic.reconcile(victim); classic.reconcile(victim);
         assertEquals(20, immunity.get()); assertEquals(1, modifiers.size());

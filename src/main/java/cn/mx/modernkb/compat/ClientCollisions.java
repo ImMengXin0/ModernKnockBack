@@ -14,7 +14,7 @@ import org.bukkit.event.*;
 import org.bukkit.event.player.*;
 import org.bukkit.plugin.Plugin;
 
-/** Classic client rules: predicted pushing, legacy hit effects and a fixed local hurt tilt. */
+/** Classic client rules plus timely delivery of the recipient's velocity in either combat mode. */
 public final class ClientCollisions implements Listener, AutoCloseable {
     private static final String HANDLER = "modernkb_collision";
     private final Plugin plugin;
@@ -27,10 +27,13 @@ public final class ClientCollisions implements Listener, AutoCloseable {
     public ClientCollisions(Plugin plugin, Supplier<Settings> settings, PlayerStore players) throws ReflectiveOperationException {
         this.plugin = plugin; this.settings = settings; this.players = players; codec = new TeamPacketCodec();
     }
-    record View(boolean classic, boolean legacyHitEffects) {}
+    record View(boolean classic, boolean legacyHitEffects, boolean timelyVelocity) {
+        View(boolean classic, boolean legacyHitEffects) { this(classic, legacyHitEffects, classic); }
+    }
     private View view(UUID id) {
         Settings config = settings.get();
-        return new View(!closed && config.classicEnabled() && !players.get(id).excluded(), config.classic().legacyHitEffects());
+        boolean active = !closed && config.enabled() && !players.get(id).excluded();
+        return new View(active && config.classicEnabled(), config.classic().legacyHitEffects(), active);
     }
     public void reconcile(Player player) {
         if (closed || !CombatTracker.owns(player)) return;
@@ -128,8 +131,15 @@ public final class ClientCollisions implements Listener, AutoCloseable {
                 promise.trySuccess();
                 return;
             }
-            for (int index = 0; index < output.size(); index++)
+            boolean flush = false;
+            for (int index = 0; index < output.size(); index++) {
+                if (current.timelyVelocity() && codec.requiresVelocityFlush(output.get(index), selfEntityId)) flush = true;
                 context.write(output.get(index), index == output.size() - 1 ? promise : context.voidPromise());
+            }
+            // Flush only after the complete transformed packet/bundle is written. TCP keeps
+            // ordering and retries; replaying an old velocity would create a second impulse.
+            // No waiting for ACKs, no extra packets, no player/world access on this thread.
+            if (flush) context.flush();
         }
     }
 }
