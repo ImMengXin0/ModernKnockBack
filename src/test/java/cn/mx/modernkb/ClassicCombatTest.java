@@ -165,6 +165,116 @@ public class ClassicCombatTest {
         assertNotNull(result);
         return receiver.getVelocity().clone().add(result.impulse()).getX();
     }
+    private AttributeInstance netheriteResistance(int pieces, double base, double nativeValue, AttributeModifier... extra) {
+        var equipment = mock(org.bukkit.inventory.EntityEquipment.class);
+        when(victim.getEquipment()).thenReturn(equipment);
+        var slots = new org.bukkit.inventory.EquipmentSlot[]{org.bukkit.inventory.EquipmentSlot.HEAD,
+                org.bukkit.inventory.EquipmentSlot.CHEST, org.bukkit.inventory.EquipmentSlot.LEGS, org.bukkit.inventory.EquipmentSlot.FEET};
+        var materials = new Material[]{Material.NETHERITE_HELMET, Material.NETHERITE_CHESTPLATE,
+                Material.NETHERITE_LEGGINGS, Material.NETHERITE_BOOTS};
+        var names = new String[]{"helmet", "chestplate", "leggings", "boots"};
+        var values = new ArrayList<AttributeModifier>(List.of(extra));
+        for (int i = 0; i < pieces; i++) {
+            var item = weapon(materials[i]);
+            when(equipment.getItem(slots[i])).thenReturn(item);
+            values.add(new AttributeModifier(NamespacedKey.minecraft("armor." + names[i]), (double) .1f,
+                    AttributeModifier.Operation.ADD_NUMBER));
+        }
+        var resistance = mock(AttributeInstance.class);
+        when(victim.getAttribute(Attribute.KNOCKBACK_RESISTANCE)).thenReturn(resistance);
+        when(resistance.getBaseValue()).thenReturn(base);
+        when(resistance.getValue()).thenReturn(nativeValue);
+        when(resistance.getModifiers()).thenReturn(values);
+        return resistance;
+    }
+    @Test public void classicIgnoresOneToFourNetheritePiecesOnGroundAirSprintAndProjectiles() {
+        for (int pieces = 0; pieces <= 4; pieces++) {
+            var resistance = netheriteResistance(pieces, 0, pieces * (double) .1f);
+            for (HitType type : new HitType[]{HitType.MELEE, HitType.FISHING_ROD, HitType.ARROW})
+                for (boolean ground : new boolean[]{false, true}) for (boolean sprint : new boolean[]{false, true}) {
+                    var context = new HitContext(victim.getUniqueId(), attacker.getUniqueId(), attacker.getUniqueId(), type,
+                            CombatantKind.PLAYER, CombatantKind.PLAYER, "ENTITY_ATTACK", ground, sprint, false, 1, false);
+                    Vector before = new Vector(.7, -.2, -.3);
+                    when(victim.getVelocity()).thenReturn(before);
+                    var result = classic.calculate(knockback(), context, KnockbackMathTest.profile(), settings);
+                    Vector after = before.clone().add(result.impulse());
+                    boolean sprintBonus = type.melee() && sprint;
+                    assertEquals(.4 + (sprintBonus ? .5 : 0), after.getX(), 1e-12);
+                    assertEquals((ground ? .36075 : .24775) + (sprintBonus ? .1 : 0), after.getY(), 1e-12);
+                    assertEquals(0, after.getZ(), 1e-12);
+                }
+            verify(resistance, never()).setBaseValue(anyDouble());
+            verify(resistance, never()).removeModifier(any(AttributeModifier.class));
+            verify(resistance, never()).removeModifier(any(net.kyori.adventure.key.Key.class));
+        }
+    }
+    @Test public void classicPreservesOtherResistanceAndRecomputesMultipliersBeforeNativeClamp() {
+        var added = new AttributeModifier(new NamespacedKey("custom", "resistance"), .1, AttributeModifier.Operation.ADD_NUMBER);
+        var scalar = new AttributeModifier(new NamespacedKey("custom", "scalar"), .5, AttributeModifier.Operation.ADD_SCALAR);
+        var multiplier = new AttributeModifier(new NamespacedKey("custom", "multiplier"), .5, AttributeModifier.Operation.MULTIPLY_SCALAR_1);
+        netheriteResistance(4, .1, 1, added, scalar, multiplier);
+        // Native capped (.1 + .1 + .4) * 1.5 * 1.5 at 1; without armor resistance is .45.
+        assertEquals(.4 * .55, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        netheriteResistance(0, .3, .3);
+        assertEquals(.4 * .7, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+    }
+    @Test public void customArmorModifiersKeepTheirResistance() {
+        var customKey = new AttributeModifier(new NamespacedKey("custom", "armor.helmet"), .2, AttributeModifier.Operation.ADD_NUMBER);
+        netheriteResistance(4, 0, .6, customKey);
+        assertEquals(.32, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        // A custom replacement of the vanilla modifier is not the built-in .1 armor bonus.
+        var replacement = new AttributeModifier(NamespacedKey.minecraft("armor.helmet"), .2, AttributeModifier.Operation.ADD_NUMBER);
+        netheriteResistance(0, 0, .2, replacement);
+        var helmet = weapon(Material.NETHERITE_HELMET);
+        when(victim.getEquipment().getItem(org.bukkit.inventory.EquipmentSlot.HEAD)).thenReturn(helmet);
+        assertEquals(.32, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        netheriteResistance(1, 0, .1);
+        var diamond = weapon(Material.DIAMOND_HELMET);
+        when(victim.getEquipment().getItem(org.bukkit.inventory.EquipmentSlot.HEAD)).thenReturn(diamond);
+        assertEquals(.36, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+    }
+    @Test public void classicArmorChangesAreReadOnEachHitAndRespectResistanceFalseStillWorks() {
+        var resistance = netheriteResistance(4, .2, .6);
+        assertEquals(.32, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        when(resistance.getModifiers()).thenReturn(List.of()); when(resistance.getValue()).thenReturn(.2);
+        when(victim.getEquipment()).thenReturn(null);
+        assertEquals(.32, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);
+        netheriteResistance(4, .2, .6);
+        var result = classic.calculate(knockback(), tracker.context(victim, attacker, "ENTITY_ATTACK", false),
+                KnockbackMathTest.profile("classic.respect-resistance", false), settings);
+        assertEquals(.4, result.impulse().getX(), 1e-12);
+    }
+    @Test public void netheriteHitReplacesAttenuatedNativeVectorOnceAndProtectsDelivery() {
+        netheriteResistance(4, 0, .4);
+        classic.acceptedDamage(damage());
+        var event = new com.destroystokyo.paper.event.entity.EntityKnockbackByEntityEvent(victim, attacker,
+                EntityKnockbackEvent.Cause.ENTITY_ATTACK, .24f, new Vector(.24, .24, 0));
+        listener.knockback(event); classic.finishedKnockback(event);
+        assertEquals(new Vector(.4, .36075, 0), event.getKnockback());
+        var extra = knockback(); listener.knockback(extra); assertTrue(extra.isCancelled());
+        when(victim.getVelocity()).thenReturn(event.getKnockback());
+        var velocity = new PlayerVelocityEvent(victim, new Vector(.24, .24, 0));
+        classic.beginVelocity(velocity); classic.velocity(velocity);
+        assertEquals(new Vector(.4, .36075, 0), velocity.getVelocity());
+        assertEquals(1, classic.applied());
+    }
+    @Test public void modernAndClassicModernWeaponsKeepNativeNetheriteResistance() {
+        var resistance = netheriteResistance(4, 0, .4);
+        for (boolean modernWeapon : new boolean[]{false, true}) {
+            var context = tracker.context(victim, attacker, "ENTITY_ATTACK", false);
+            if (modernWeapon) {
+                settings = settings.withMode(CombatMode.CLASSIC, ClassicSettings.defaults()); enableModernItems("MACE");
+                context = new HitContext(victim.getUniqueId(), attacker.getUniqueId(), attacker.getUniqueId(), HitType.MACE,
+                        CombatantKind.PLAYER, CombatantKind.PLAYER, "ENTITY_ATTACK", true, false, false, 1, false, "MACE");
+            } else settings = settings.withMode(CombatMode.MODERN, ClassicSettings.defaults());
+            when(tracker.context(eq(victim), any(), anyString(), anyBoolean())).thenReturn(context);
+            var event = new com.destroystokyo.paper.event.entity.EntityKnockbackByEntityEvent(victim, attacker,
+                    EntityKnockbackEvent.Cause.ENTITY_ATTACK, .24f, new Vector(.24, .24, 0));
+            listener.knockback(event);
+            assertEquals(new Vector(.24, .24, 0), event.getKnockback());
+        }
+        verify(resistance, never()).getModifiers();
+    }
     @Test public void clickDensityReducesOnlyTheClickersNewMeleeKnockbackAndExpires() {
         for (int i = 0; i < 5; i++) assertFalse(densityClick(victim, attacker).isCancelled());
         assertEquals(0.32, incomingHorizontal(victim, attacker, HitType.MELEE), 1e-12);

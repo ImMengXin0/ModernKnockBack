@@ -1,4 +1,4 @@
-# ModernKnockBack 2.5.0
+# ModernKnockBack 2.6.0
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
@@ -10,6 +10,7 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 - 启动、切换模式及重载时自动补全当前模式缺失配置；保留已配置数值、旧字段与自定义 profile，修改前自动备份。
 - classic 的 `classic/combat.yml` 新增 `legacy-axe-damage: true`（升级自动补全）：木/金、石、铁、钻石斧按 1.8 基础总伤害 4、5、6、7 计算，暴击、力量、附魔及护甲仍由原版计算。切换武器、modern 模式、排除玩家及停用时恢复；铜/下界合金斧与显式自定义攻击属性的物品保留原值。
 - classic 默认只列出 5 个主要 KB 参数；相同命中状态覆盖旧动量，疾跑推力统一方向，关闭默认高度锁定。
+- classic 向量忽略下界合金护甲自带的抗击退，保留基础属性和其他自定义抗性，不新增配置；Modern 及 `classic/item.yml` 指定的现代武器继续使用原生抗性。
 - classic 默认 `stop_sprint: false`，按旧 KnockbackManager 的客户端疾跑状态计算 KB；攻击重置不会消耗下一刀的疾跑附加，真实停止/重新开启疾跑及 jump reset 仍生效。
 - classic jump reset 的反向动量最多抵消本次实际水平推力的 75%，避免将击退完全抵消；侧向走位与正常跳跃收益保留，无需新增配置。
 - classic 支持 CPS 密度：按最近两个 tick 中较密集的单 tick 实体攻击次数，在新近战受击时最多额外减少 20% 的水平退速，与 jump reset 共用 25% 推力下限。`click-density-enabled` 默认开启，升级自动补全，见 [密度规则](docs/CLICK-DENSITY.md)。
@@ -30,7 +31,9 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.5.0.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.6.0.jar`。
+
+2.6.0 让 Classic 向量忽略下界合金护甲自带的抗击退，普通攻击、疾跑、鱼竿和弓箭均适用；保留基础与自定义抗性，Modern 及现代武器例外沿用原生规则，无需新增配置。见 [2.6.0 发布说明](docs/RELEASE-2.6.0.md)。
 
 2.5.0 合并 [DevXingMC 的 PR #2](https://github.com/ImMengXin0/ModernKnockBack/pull/2)：修复长矛突刺/突进沿用 Classic 无冷却攻速，补齐切槽、副手交换、装备更新和插件替换手持物品时的即时同步。整合后的例外统一由 `classic/item.yml` 决定，重锤与自定义物品同样生效；补上排除/Modern 状态的旧攻速清理及 Folia 区域检查。包含下述物品例外功能、既有免疫窗口衔接和原有网络补丁，见 [2.5.0 发布说明](docs/RELEASE-2.5.0.md)。
 

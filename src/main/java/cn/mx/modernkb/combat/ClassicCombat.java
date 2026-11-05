@@ -458,14 +458,14 @@ public final class ClassicCombat implements Listener {
         if (attack.direction().lengthSquared() < 1e-12)
             attack = new ClassicKnockbackMath.Attack(event.getKnockback().clone().add(before.clone().multiply(0.5)),
                     attack.facing(), attack.sprint(), attack.enchantment(), attack.punch(), attack.strength());
-        var resistance = victim.getAttribute(Attribute.KNOCKBACK_RESISTANCE);
+        double resistance = profile.classic().respectResistance() ? ClassicResistance.value(victim) : 0;
         boolean limited = context.type().melee() && profile.classic().yLimit() && heightLimited(victim, profile);
         boolean jumpReset = config.classic().jumpResetEnabled() && context.type().melee()
                 && isJumpReset(victim, context, before, config.classic().jumpResetWindowTicks());
         double densityReduction = context.type().melee() && victim instanceof Player player && densityEligible(player, config)
                 ? clickDensity.reduction(id, now, config) : 0;
         Vector impulse = ClassicKnockbackMath.impulse(before, context, profile, attack,
-                resistance == null ? 0 : resistance.getValue(), limited, jumpReset, densityReduction);
+                resistance, limited, jumpReset, densityReduction);
         return new Calculation(impulse, new HitCommit(scopedRod, rod, id, hit, config, now, attack, victim));
     }
     private boolean isJumpReset(LivingEntity victim, HitContext context, Vector before, int window) {

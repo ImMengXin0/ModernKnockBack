@@ -16,7 +16,7 @@ public final class CombatWarmup {
         Objects.requireNonNull(profile);
         for (Class<?> root : List.of(ClassicCombat.class, CombatTracker.class, KnockbackListener.class,
                 ClassicClickDensity.class, ClassicJumpTracker.class, HitClassifier.class,
-                ClassicKnockbackMath.class, KnockbackMath.class, NativeKnockbackMath.class,
+                ClassicKnockbackMath.class, ClassicResistance.class, KnockbackMath.class, NativeKnockbackMath.class,
                 CombatItems.class, HitContext.class, HitType.class, CombatantKind.class, KnockbackProfileEvent.class,
                 KnockbackModifyEvent.class, LeafVelocityDispatch.class, RemoveEntryTask.class)) initializeTree(root);
 

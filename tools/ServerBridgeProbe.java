@@ -11,6 +11,7 @@ public final class ServerBridgeProbe {
     public static void main(String[] args) throws Exception {
         Class.forName("net.minecraft.SharedConstants").getMethod("tryDetectVersion").invoke(null);
         Class.forName("net.minecraft.server.Bootstrap").getMethod("bootStrap").invoke(null);
+        verifyNetheriteArmorModifiers();
         verifyDispatchInitialization();
         verifyProjectileCollision();
         verifyRodSweep();
@@ -74,6 +75,28 @@ public final class ServerBridgeProbe {
         verifyHurtAnimation(codec, original);
         verifyTimelyVelocity(codec);
         System.out.println("Native bridge probe OK (no running server / no client PvP test)");
+    }
+    private static void verifyNetheriteArmorModifiers() {
+        var pieces = new net.minecraft.world.item.Item[]{net.minecraft.world.item.Items.NETHERITE_HELMET,
+                net.minecraft.world.item.Items.NETHERITE_CHESTPLATE, net.minecraft.world.item.Items.NETHERITE_LEGGINGS,
+                net.minecraft.world.item.Items.NETHERITE_BOOTS};
+        var slots = new net.minecraft.world.entity.EquipmentSlot[]{net.minecraft.world.entity.EquipmentSlot.HEAD,
+                net.minecraft.world.entity.EquipmentSlot.CHEST, net.minecraft.world.entity.EquipmentSlot.LEGS,
+                net.minecraft.world.entity.EquipmentSlot.FEET};
+        var names = new String[]{"helmet", "chestplate", "leggings", "boots"};
+        for (int i = 0; i < pieces.length; i++) {
+            String key = "minecraft:armor." + names[i];
+            int[] count = {0};
+            new net.minecraft.world.item.ItemStack(pieces[i]).forEachModifier(slots[i], (attribute, modifier) -> {
+                if (!attribute.equals(net.minecraft.world.entity.ai.attributes.Attributes.KNOCKBACK_RESISTANCE)) return;
+                require(modifier.id().toString().equals(key), "Netherite resistance key changed: " + modifier.id());
+                require(modifier.operation() == net.minecraft.world.entity.ai.attributes.AttributeModifier.Operation.ADD_VALUE
+                        && Math.abs(modifier.amount() - (double) .1f) < 1e-8, "Netherite resistance signature changed");
+                count[0]++;
+            });
+            require(count[0] == 1, "Expected one built-in netherite resistance modifier for " + key);
+        }
+        System.out.println("Native netherite armor OK: all four slot keys and resistance signatures match the Classic filter");
     }
     private static void verifyTimelyVelocity(TeamPacketCodec codec) throws Exception {
         for (boolean classic : new boolean[]{false, true}) {
