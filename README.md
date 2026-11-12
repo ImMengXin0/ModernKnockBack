@@ -1,92 +1,147 @@
 # ModernKnockBack 2.7.0
 
-[下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
+Minecraft 1.21.11 / Java 21+。本页只说明 Classic、Modern 配置参数和管理命令。
 
-Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackManager 的分类配置思路，针对现代 Paper 事件与 Folia 调度重新实现，不依赖旧插件或 ThePit 核心。
+## 命令
 
-- `/kbtest classic|modern` 切换经典无蓄力攻击/旧版向量与现代战斗，保存模式并在重启后继续使用。
-- `/kb gui` 打开当前模式的 KB 菜单；提供全局默认值和各 profile 的参数分类、说明、调节及即时保存。Classic 和 Modern 分别写入各自的 `profiles.yml`。
-- `classic/` 和 `modern/` 独立配置目录，升级自动迁移已有现代配置。
-- Classic 的 `classic/item.yml` 支持指定主手物品使用高版本原生攻击与 Modern KB，默认全部 7 种长矛及重锤，支持 reload，见 [物品例外](docs/ITEM-COMBAT.md)。
-- 启动、切换模式及重载时自动补全当前模式缺失配置；保留已配置数值、旧字段与自定义 profile，修改前自动备份。
-- classic 的 `classic/combat.yml` 新增 `legacy-axe-damage: true`（升级自动补全）：木/金、石、铁、钻石斧按 1.8 基础总伤害 4、5、6、7 计算，暴击、力量、附魔及护甲仍由原版计算。切换武器、modern 模式、排除玩家及停用时恢复；铜/下界合金斧与显式自定义攻击属性的物品保留原值。
-- classic 默认只列出 5 个主要 KB 参数；相同命中状态覆盖旧动量，疾跑推力统一方向，关闭默认高度锁定。
-- classic 向量忽略下界合金护甲自带的抗击退，保留基础属性和其他自定义抗性，不新增配置；Modern 及 `classic/item.yml` 指定的现代武器继续使用原生抗性。
-- classic 默认 `stop_sprint: false`，按旧 KnockbackManager 的客户端疾跑状态计算 KB；攻击重置不会消耗下一刀的疾跑附加，真实停止/重新开启疾跑及 jump reset 仍生效。
-- classic jump reset 的反向动量最多抵消本次实际水平推力的 75%，避免将击退完全抵消；侧向走位与正常跳跃收益保留，无需新增配置。
-- classic 支持 CPS 密度：按最近两个 tick 中较密集的单 tick 实体攻击次数，在新近战受击时最多额外减少 20% 的水平退速，与 jump reset 共用 25% 推力下限。`click-density-enabled` 默认开启，升级自动补全，见 [密度规则](docs/CLICK-DENSITY.md)。
-- 玩家、Bot、弓箭、弩、三叉戟、重锤、长矛、横扫、盾牌、风弹、水晶、TNT、一般爆炸独立路由。
-- 狂暴连击、死神提供显式 Java API，不靠猜测伤害名称。
-- Modern 路径的地面/空中水平与垂直倍率、疾跑/暴击/未蓄满额外倍率、增量限幅。
-- Modern 可选原生公式：独立控制新增推力、旧速度保留、地面 Y 上限和空中抬升策略。
-- 鱼竿抛投间隔、收杆间隔、初始飞行速度、空中重力倍率、距离、存活时间，以及可选碰撞击退。
-- classic 鱼钩命中发起真实 0 伤害投射物受击，支持受击动画、声音及经典向量；收杆取消玩家/生物拉回。
-- classic 成功命中后鱼钩挂住目标，仅对被钩玩家隐藏，出杆者与旁观者保留鱼钩和钓线；取消或免疫命中不挂钩。右键正常收回，不拉回目标，同一枚鱼钩只接触一次。
-- classic 本人受击改用旧版固定方向晃动，保留受伤动画；不改玩家朝向。先发送鱼竿速度，再隐藏/挂钩和播放受击效果。
-- classic 连续鱼竿及竿接刀遵守完整受击窗口，默认 10 tick；固定 0.3 格鱼钩碰撞余量，改善近距离横移目标漏判。
-- classic 保留原生命中目标和攻击距离，不再根据挥手包补刀或扩大命中边缘；使用玩家 UUID 排除实体互推，保留鱼钩/箭的碰撞资格，modern 恢复原规则。
-- classic 屏蔽横扫攻击音效与剑气粒子，支持普通包及组合包；modern 和排除玩家恢复原效果。
-- classic 默认开启旧版命中反馈：隐藏现代伤害指示粒子与攻击附加音效，保留受击变红、受伤声、挥手和暴击/附魔粒子。用 `classic/combat.yml` 的 `legacy-hit-effects` 开关对比，见 [观感说明](docs/CLASSIC-FEEL.md)。
-- KnockbackSync 共存策略、Folia 实体调度、配置严格校验与原子保存。
-- 无需配置的网络发送优化：classic / modern 及时刷新本人速度及爆炸包，减少批量发送等待，保留顺序和单次 KB；TCP 负责丢包重传，不按 Ping 改向量，见 [网络补丁](docs/NETWORK-DELIVERY.md)。
+`/modernkb`、`/mkb`、`/kb` 是同一组命令别名；`/kbtest` 用于切换模式或重载。所有命令要求 `modernkb.admin` 权限，默认授予 OP。
 
-文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
+| 命令 | 作用 |
+|---|---|
+| `/kb gui` | 打开当前模式的配置菜单；仅玩家可用。菜单可选择默认值或 profile，修改后立即校验、保存并应用。 |
+| `/mkb` 或 `/mkb status` | 查看插件、服务器、当前模式、profile 数量、击退处理统计、KnockbackSync 状态，以及 Classic 的受击间隔和保护状态。 |
+| `/mkb list` | 列出当前模式可用的 profile。 |
+| `/mkb view <profile>` | 查看指定 profile 当前加载的参数。 |
+| `/mkb reload` | 校验并重载当前模式的配置；Classic 同时重载 `item.yml` 和所需的 Modern 配置。 |
+| `/kbtest classic` | 切换到 Classic 模式。模式会保存并在服务器重启后继续使用。 |
+| `/kbtest modern` | 切换到 Modern 模式。模式会保存并在服务器重启后继续使用。 |
+| `/kbtest reload` | 重载当前模式的配置。 |
+| `/mkb get <玩家名或UUID>` | 查看玩家当前 profile 和是否被排除。玩家名仅能解析在线玩家；离线玩家请用 UUID。 |
+| `/mkb setprofile <玩家名或UUID> <profile>` | 为玩家指定 profile。使用 `default` 恢复按击打类型自动选择。 |
+| `/mkb exclude <玩家名或UUID> <true/false>` | 设置是否排除此玩家；排除只停止本插件修改，不会取消原版击退。 |
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.7.0.jar`。
+## 配置结构
 
-2.7.0 新增 `/kb gui` 游戏内配置菜单。菜单随当前模式显示 Classic 或 Modern 参数，可按全局默认值或 profile 调节，并即时校验、保存和应用；各模式独立写入自己的 `profiles.yml`。参数附带说明、取值范围和步长，详见 [2.7.0 发布说明](docs/RELEASE-2.7.0.md)。
+服务器配置位于 `plugins/ModernKnockBack/`：
 
-2.6.0 让 Classic 向量忽略下界合金护甲自带的抗击退，普通攻击、疾跑、鱼竿和弓箭均适用；保留基础与自定义抗性，Modern 及现代武器例外沿用原生规则，无需新增配置。见 [2.6.0 发布说明](docs/RELEASE-2.6.0.md)。
+| 文件 | 用途 |
+|---|---|
+| `classic/config.yml`、`modern/config.yml` | 当前模式的总开关、击打分类路由、Bot 识别和 KnockbackSync 策略。 |
+| `classic/profiles.yml`、`modern/profiles.yml` | 击退参数。`defaults` 提供继承值；`profiles.<名称>` 只需写出要覆盖的字段。 |
+| `classic/combat.yml` | Classic 攻击间隔、疾跑、jump reset、CPS 密度和战斗反馈。 |
+| `classic/item.yml` | Classic 模式下使用高版本原生攻击机制的主手物品列表。 |
 
-2.5.0 合并 [DevXingMC 的 PR #2](https://github.com/ImMengXin0/ModernKnockBack/pull/2)：修复长矛突刺/突进沿用 Classic 无冷却攻速，补齐切槽、副手交换、装备更新和插件替换手持物品时的即时同步。整合后的例外统一由 `classic/item.yml` 决定，重锤与自定义物品同样生效；补上排除/Modern 状态的旧攻速清理及 Folia 区域检查。包含下述物品例外功能、既有免疫窗口衔接和原有网络补丁，见 [2.5.0 发布说明](docs/RELEASE-2.5.0.md)。
+选 profile 的优先级：精确 `matchups` → 玩家手动分配的非 `default` profile（`respect-player-profile: true` 时）→ 类型路由 → `default`。`profiles.yml` 中未写出的字段继承 `defaults`。profile 自己的 `enabled: false` 只关闭该 profile；`config.yml` 的 `enabled: false` 关闭整套模式配置。
 
-2.4.1 新增 Classic 物品例外：白名单主手武器恢复原生冷却、疾跑资格和武器机制；击退从 `modern/` 对应路由读取，跳过 Classic 向量、CPS 减退及重复组件合并。`/mkb reload` 同时校验列表与依赖的 Modern 配置；鱼竿接武器保护和 Classic 全局碰撞/视听规则继续生效。
+## 两种模式共用的 `config.yml`
 
-2.4.0 将 Leaf 速度派发识别和受击包改写的首次初始化提前到插件启动，减少重启后全服第一击的服务端初始化开销。预初始化只处理内存对象，不发送受击或速度包；详见 [首次击退审查](docs/FIRST-HIT.md)。
+| 参数 | 含义 |
+|---|---|
+| `config-version` | 配置格式版本，当前为 `1`，不要手动修改。 |
+| `enabled` | 当前模式的总开关。关闭后不修改 KB。 |
+| `affect-other-living-entities` | 是否修改普通生物 KB。`false` 时玩家和已识别 Bot 仍可处理。 |
+| `respect-player-profile` | 是否优先采用玩家手动分配的非 `default` profile。精确 `matchups` 仍优先。 |
+| `bot-metadata` | Bukkit metadata 名称列表。实体匹配任一名称时识别为 Bot；API 的 Bot 标记可覆盖此判断。 |
+| `compatibility.knockbacksync` | `preserve-y` 或 `before-sync`。Modern 默认 `preserve-y`：真实玩家近战的 Y 分量留给 KnockbackSync；`before-sync` 允许先写入完整向量，但后续同步仍可能改写 Y。Classic 默认 `before-sync`，并由 `combat.yml` 的速度保护控制最终速度事件。 |
+| `profiles` | 击打类型到 `profiles.yml` profile 名称的映射。默认包括 `melee`、`bot-melee`、`arrow`、`crossbow`、`trident`、`mace`、`spear`、`sweep`、`shield-block`、`fishing-rod`、`wind-charge`、`explosion`、`crystal`、`tnt`、`regularity`、`grim-reaper`、`other-projectile`、`damage`、`unknown`。 |
+| `matchups` | 可选的精确覆盖，格式为 `<击打类型>.<攻击者类别>.<受击者类别>: <profile>`。类别是 `player`、`bot`、`other`、`unknown`；例如 `arrow.player.bot: arrow_to_bot`。目标 profile 必须已定义。 |
 
-2.4.0 合并 [DevXingMC 的 PR #1](https://github.com/ImMengXin0/ModernKnockBack/pull/1)：启动预热战斗类和纯计算路径，将首击提交/清理回调改为显式类，并跳过非旧版斧头的 ItemMeta 读取。保留上述初始化修复及网络发送补丁，不新增配置。整合代码已通过 331 项测试及三核心离线检查；作者的 Paper 冷启动测量见 [PR 验证记录](docs/FIRST-HIT-WARMUP.md)，不是本次整合包的实服性能结果。
+普通近战中只要攻击者或受击者是 Bot，就走 `bot-melee` 路由。自定义 profile 可在 `profiles.yml` 的 `profiles:` 下新增，再从路由或 `matchups` 指向它。
 
-2.3.0 新增 classic 的 1.8 斧头基础伤害适配。`legacy-axe-damage: true` 默认开启并自动补全；标准玩家基础属性下，木/金、石、铁、钻石斧的基础总伤害为 4、5、6、7 点。通过临时属性修正交给原生流程计算后续伤害，支持切换武器及切回 modern 时恢复。完整变更和升级方法见 [2.3.0 发布说明](docs/RELEASE-2.3.0.md)。
+## Classic 参数
 
-2.2.0 基于原始 2.0.5，整合 jump reset 反向动量限制、CPS 密度、鱼钩重力倍率和旧版命中反馈。`legacy-hit-effects` 默认开启并自动补全，减少现代额外粒子和音效，保留受击变红、受伤声、挥手及暴击/附魔粒子。它不替换客户端模型或第一人称持刀动画，完整旧版客户端动画仍需客户端支持。完整变更和升级方法见 [2.2.0 发布说明](docs/RELEASE-2.2.0.md)。
+### `classic/profiles.yml`
 
-`rod.gravity-multiplier` 控制未命中鱼钩的空中下落加速度，范围 1.0～4.0，默认 1.0 保留原版轨迹。想加快下落时在实际使用 profile 的 rod 段设置 1.5；classic 常用 `profiles.fishing_rod.rod.gravity-multiplier`。配置自动补全，classic / modern 分别读取自己的文件，重载后新抛出的鱼钩生效。
+Classic 参数是目标速度值，不是格数。普通默认值：水平 `0.4`、地面 Y `0.36075`、空中 Y `0.24775`、疾跑水平附加 `0.5`、附加 Y `0.1`。可选的高级字段不一定出现在新配置模板中，但可添加到 `defaults` 或单个 profile。
 
-密度减退只在新命中计算一次，保留受击间隔、速度同步与模式隔离，不按点击次数连续乘原生攻击减速。
+| 参数 | 含义 |
+|---|---|
+| `enabled` | 当前 profile 是否参与修改 KB。 |
+| `classic.horizontal` | 地面和空中共用的水平基础速度简写；`horizontal-ground`、`horizontal-air` 可分别覆盖。 |
+| `classic.horizontal-ground` / `classic.horizontal-air` | 地面／空中的基础水平速度，不含疾跑和击退附魔加成。 |
+| `classic.vertical-ground` / `classic.vertical-air` | 地面／空中的基础 Y 速度。 |
+| `classic.horizontal-retention` | 受击前水平动量保留比例。`0` 不保留，`0.5` 保留一半。 |
+| `classic.vertical-retention` | 受击前垂直动量保留比例。 |
+| `classic.sprint-horizontal` | 疾跑近战的额外水平速度。 |
+| `classic.sprint-vertical` | 有疾跑或击退附魔带来的水平加成时，额外增加一次 Y 速度。 |
+| `classic.enchantment-horizontal` | 击退附魔每级增加的水平速度，默认每级 `0.5`。 |
+| `classic.vertical-max` | 最终向上 Y 速度上限。 |
+| `classic.respect-resistance` | 是否应用其他抗击退属性。Classic 始终忽略下界合金护甲自带的抗击退；开启时仍保留其他抗性影响。 |
+| `classic.y-limit-enabled` | 是否启用近战高度限制，默认关闭。 |
+| `classic.max-height` | 超过离地高度阈值后触发 Y 限制，单位为方块。 |
+| `classic.vertical-after-limit` | 触发高度限制后使用的 Y 速度。 |
 
-2.0.5 修复 classic 受击的定向镜头倾斜和鱼钩回弹观感：仅把本人受击包角度归零；成功鱼钩改为原生挂载并对受击者隐藏。修复 Leaf 开启 `flush-location-while-knockback-player` 时，同一击第二次速度事件可再次被同步插件改写的问题，限定保护原生同步调用中的那一次事件。保留原 KB 数值、受击间隔及技巧，不重放速度、不修改核心。升级正常重启即可；实际客户端手感与网络延迟仍须联机复测，详见 [视角、鱼钩与同步说明](docs/CLASSIC-FEEL.md)。
+鱼竿使用独立 profile。当前 `fishing_rod` 默认水平 `0.50`、地面和空中 Y `0.34`，且关闭疾跑附加；鱼竿不会套用近战疾跑加成。
 
-2.0.4 优化 classic 技巧与同步一致性：jump reset 需同时具有跳跃输入、跳跃事件和成功移动，避免把普通击飞认作跳跃；修复 KnockbackSync 直接改实体速度时的保护遗漏，发包时保留实际运动状态，并拦截已取消或过期的击退记录。W-tap/S-tap 按收到的疾跑动作生效，strafe 保持方向对称；不按 ping 加力或延长受击窗口。数值和配置项保持不变，说明及实服复测表见 [Classic 技巧与延迟](docs/CLASSIC-TECHNIQUES.md)。
+### `classic/combat.yml`
 
-2.0.3 在 classic 中保留命中后的鱼钩与钓线，命中后轻微回弹下落，收杆间隔从实际收杆开始计算；每枚鱼钩只触发一次受击。同时屏蔽横扫剑气粒子，沿用2.0.2的横扫消音。普通近战仍使用原生3.0格距离，无新增配置项。无需删除已有配置；验证范围见 [验证记录](docs/VERIFICATION.md)。
+tick 按服务器 tick 计；20 TPS 时 10 tick 约为 500 毫秒。这里的间隔是受击保护，不是攻击者的点击冷却。
 
-2.0.1 修复 classic 贴身跳跃暴击时偶发的方向偏转：双方水平位置几乎重合时，使用命中时攻击者的水平朝向，避免放大极小位置差或沿用核心的随机方向。正常距离仍按攻击者到受击者的方向推开。
+| 参数 | 含义 |
+|---|---|
+| `hit-interval-ticks` | 同一受击者普通近战的最小受击间隔，默认 `10`。保护期内的攻击不排队执行。 |
+| `rod-hit-interval-ticks` | 鱼竿重复受击间隔；实际间隔取此值与 `hit-interval-ticks` 的较大值。 |
+| `rod-melee-interval-ticks` | 鱼竿命中后接刀保护间隔；实际取三个间隔字段中的最大值。 |
+| `disable-sweep` | `true` 时关闭横扫攻击。 |
+| `legacy-hit-effects` | `true` 时隐藏部分现代攻击提示粒子和提示音，保留受击变红、受伤声及暴击／附魔反馈；不改变伤害和 KB。 |
+| `protect-velocity-from-sync` | 是否在速度事件中保护本次 Classic 速度，降低同步插件覆盖该速度的可能。 |
+| `stop_sprint` | `false` 时按客户端疾跑状态计算 KB，攻击后的服务器疾跑重置不会消耗下一刀的疾跑加成；玩家主动停止疾跑仍生效。`true` 时按服务器疾跑状态计算。 |
+| `jump-reset-enabled` | 是否识别并应用 jump reset 的动量保留。反向动量最多抵消本次水平推力的 75%，保留至少 25% 前向推力。 |
+| `jump-reset-window-ticks` | 确认跳跃输入、跳跃事件及成功移动的有效窗口长度，默认 `2` tick。 |
+| `click-density-enabled` | 是否按受击者最近 tick 的密集实体攻击尝试减少自身水平退速。2/3/4/5 次约减少 5%/10%/15%/20%，最高 20%；不增加对方 KB 或伤害，也不缩短受击间隔。 |
+| `legacy-axe-damage` | 是否在 Classic 中把标准木／金、石、铁、钻石斧基础总伤害适配为 1.8 数值 4/5/6/7。它改变伤害，不是 KB 参数。 |
 
-2.0 为公开发布版本，沿用已确认可正常击退的 classic/modern 实现。安装时只保留一个本插件 Jar，并正常重启。Linux 等区分大小写的文件系统会在新目录尚无数据时将旧 `plugins/ModernKnockback/` 迁移到 `plugins/ModernKnockBack/`；已有配置、玩家分配与模式一并保留。若两个目录都已有数据，使用新目录且不合并覆盖。Java API 类名保持兼容，调用方依赖名称使用 `ModernKnockBack`。
+旧字段 `reset-sprint-on-hit` 仅作兼容：未设置 `stop_sprint` 时可代替它；不要同时设置相反的值。
 
-默认启用 modern。已有 1.0/1.1 配置自动迁移保留，全新 modern 使用 responsive-pvp 预设，classic 使用旧天坑 KB 起点。修改当前模式目录内的配置后用 `/mkb reload`。不要与旧版 KnockbackManager 同服加载。
+### `classic/item.yml`
 
-2.0 修复近距离鱼钩仍使用现代动态余量、零伤害杆提前结束免疫的问题。classic 使用旧版固定 0.3 碰撞余量，连续杆及竿接刀至少遵守 hit-interval-ticks（默认10 tick）。旧的短 rod 配置不覆盖原文件，但实际不再缩短共同保护。保留1.2.9的投射物碰撞资格与原生近战距离修复。详见鱼竿修复说明及联网源码依据。
+| 参数 | 含义 |
+|---|---|
+| `modern-items` | 主手物品白名单。命中列表时使用原生高版本攻击冷却和武器机制，并从 Modern 配置读取 KB。默认是七种长矛和 `MACE`；设置为 `[]` 可关闭全部例外。 |
 
-当前模式缺失字段自动写回；切换模式或 `/mkb reload` 也会补全。旧 classic 的 fishing_rod 自动补齐独立向量与 rod 字段，已直接设置或显式继承 defaults 的数值保留，缺失的 impact-strength 补为0.4。备份在插件数据目录 backups/，没有缺项时不重写或重复备份。
+## Modern 参数
 
-全新安装默认杆水平0.50、地面/空中 Y=0.34、强度0.4、抛投间隔2、收杆后间隔0、水平飞行倍率1.15；属于调试起点，未进行真人手感测试。旧配置已有值继续使用，若主动采用整套起点，可使用 [鱼竿配置片段](presets/classic-rod-responsive.yml)。已有玩家 profile 分配优先于类型路由，详见修复说明。
+### `modern/profiles.yml`
 
-关闭疾跑重置时，将 classic/combat.yml 的 `reset-sprint-on-hit: true` 替换为 `stop_sprint: false`。不要同时保留相互矛盾的两个值。旧版显式启用的高度锁定或动量保留仍生效，详见审查说明。
+Modern 普通模式调整原生 KB 增量：最终速度由原有速度和击退增量组成。倍率 `1.0` 保持原值；这些倍率不是击退距离。
 
-攻击目标与范围由原生流程处理，已移除1.2.8的命中边缘补判。防互推的服务端部分只添加玩家碰撞排除名单，客户端沿用队伍包副本，不修改真实计分板或名称格式。三核心检查直接调用实际鱼钩候选目标与推挤判定，复现旧问题并验证新处理；尚未完成真人 PvP 或真实 KnockbackSync 网络共存测试。
+| 参数 | 含义 |
+|---|---|
+| `enabled` | 当前 profile 是否参与修改 KB。 |
+| `horizontal.ground` / `horizontal.air` | 地面／空中水平击退增量倍率。 |
+| `vertical.ground` / `vertical.air` | 地面／空中垂直击退增量倍率。 |
+| `modern.sprint-multiplier` | 疾跑近战的额外倍率。 |
+| `modern.critical-multiplier` | 暴击近战的额外倍率，不改变暴击伤害。 |
+| `modern.weak-hit-multiplier` | 未满蓄力近战倍率：蓄力 0 时使用该值，满蓄力时过渡到 `1.0`。 |
+| `limits.horizontal` | 水平击退增量长度上限；`0` 不限。 |
+| `limits.upward` | 向上击退增量上限；`0` 不限。 |
+| `limits.downward` | 向下击退增量绝对值上限；`0` 不限。 |
 
-## 项目目录
+疾跑、暴击和蓄力倍率用于近战／横扫。原生攻击冷却、伤害及武器机制仍由服务器处理。
 
-```text
-src/main/java/        插件源码与公开接口
-src/main/resources/   plugin.yml、配置模板及旧配置兼容资源
-src/test/java/        自动测试
-presets/              可选 MKB 与 KnockbackSync 参数预设
-docs/                 当前使用、接口与验证说明
-tools/                三核心编译与底层包适配检查（不启动服务器）
-dist/                 当前 Jar、干净源码包与验证日志（不纳入源码包）
-pom.xml               Java 21 / Maven 构建配置
-```
+### Modern 原生公式参数
 
-配置模板统一维护在 src/main/resources/classic/ 和 src/main/resources/modern/。服务器启动后自动生成 plugins/ModernKnockBack/ 内的模式配置。`mvn package` 会重新生成 target/。核心检查前运行 `mvn dependency:build-classpath -DincludeScope=test -Dmdep.outputFile=target/test-dependencies.txt`，再在 PowerShell 执行 `./tools/verify-server-apis.ps1 -CoreDirectory '核心 Jar 所在目录'`。可传 `-VanillaBundle 'mojang_1.21.11.jar路径'` 使用本地缓存；检查不会启动游戏服务器。
+| 参数 | 含义 |
+|---|---|
+| `native.enabled` | 尝试按已验证的原生攻击公式调整击退。公式或事件数据不匹配时自动回退到普通倍率路径。 |
+| `native.horizontal-retention-ground` / `native.horizontal-retention-air` | 地面／空中时受击前水平动量的保留比例；原版公式常用 `0.5`。 |
+| `native.vertical-retention-ground` | 地面命中时受击前 Y 速度的保留比例。 |
+| `native.vertical-max-ground` | 原生公式下地面击退后的 Y 速度上限。 |
+| `native.air-vertical-mode` | `preserve` 保留原生空中 Y；`add` 根据上限添加向上的 Y 速度。 |
+| `native.vertical-max-air` | `air-vertical-mode: add` 时使用的空中 Y 速度上限；不会为满足上限而降低更快的上升速度。 |
+
+### 两种模式共用的鱼竿 profile 参数
+
+在 `profiles.yml` 的 `defaults.rod` 设置全局继承值，也可在 `profiles.<名称>.rod` 单独覆盖。
+
+| 参数 | 含义 |
+|---|---|
+| `rod.enabled` | 是否启用插件鱼竿控制；Classic 下也控制自定义鱼竿 KB。 |
+| `rod.cast-interval-ticks` | 两次成功出杆的最短间隔。 |
+| `rod.recast-delay-ticks` | 收杆后再次出杆前的最短等待时间。 |
+| `rod.horizontal-speed-multiplier` | 鱼钩出杆时水平初速度倍率，`1.0` 为原版。 |
+| `rod.vertical-speed-multiplier` | 鱼钩出杆时垂直初速度倍率，`1.0` 为原版。 |
+| `rod.gravity-multiplier` | 鱼钩飞行时的额外下落加速度倍率；`1.0` 为原版，调高会更快下落。 |
+| `rod.max-distance` | 鱼钩飞行距离上限；`0` 不添加距离限制。 |
+| `rod.max-lifetime-ticks` | 鱼钩寿命上限；`0` 不添加寿命限制。 |
+| `rod.impact-strength` | 鱼钩碰撞 KB 强度；`0` 关闭碰撞 KB。Classic 中 `0.4` 是完整向量强度；Modern 中作为原生击退强度使用。它不增加鱼竿伤害，也不控制收杆拉回力度。 |
