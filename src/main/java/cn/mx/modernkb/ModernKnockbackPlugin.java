@@ -8,6 +8,7 @@ import cn.mx.modernkb.compat.RodCollision;
 import cn.mx.modernkb.compat.ClientCollisions;
 import cn.mx.modernkb.compat.LeafVelocityDispatch;
 import cn.mx.modernkb.config.*;
+import cn.mx.modernkb.gui.KnockbackGui;
 import cn.mx.modernkb.rod.RodListener;
 import java.io.IOException;
 import java.util.*;
@@ -30,6 +31,7 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
     private ClassicCombat classic;
     private PlayerPushRules pushing;
     private ClientCollisions collisions;
+    private KnockbackGui gui;
     private final AtomicBoolean updating = new AtomicBoolean();
     private final Object configurationLock = new Object();
 
@@ -52,9 +54,10 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
             classic = new ClassicCombat(this, () -> settings, players, tracker, RodVelocity.forServer());
             pushing = new PlayerPushRules(this, () -> settings, players);
             collisions = new ClientCollisions(this, () -> settings, players);
+            gui = new KnockbackGui(this, () -> settings, this::editGuiProfile);
             knockback = new KnockbackListener(() -> settings, players, tracker, sync::active, classic);
             rods = new RodListener(this, () -> settings, players, tracker, classic, RodCollision.forServer());
-            for (var listener : List.of(tracker, sync, pushing, collisions, classic, knockback, rods)) Bukkit.getPluginManager().registerEvents(listener, this);
+            for (var listener : List.of(tracker, sync, pushing, collisions, classic, knockback, rods, gui)) Bukkit.getPluginManager().registerEvents(listener, this);
             Bukkit.getServicesManager().register(ModernKnockbackAPI.class, this, this, ServicePriority.Normal);
             Objects.requireNonNull(getCommand("modernkb")).setExecutor(this);
             getCommand("modernkb").setTabCompleter(this);
@@ -79,6 +82,7 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
         HandlerList.unregisterAll(this);
         Bukkit.getAsyncScheduler().cancelTasks(this);
         if (rods != null) rods.close();
+        gui = null;
         if (classic != null) classic.close();
         if (pushing != null) pushing.close();
         if (collisions != null) collisions.close();
@@ -155,6 +159,9 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
                             + " | file=classic/item.yml | KB=modern/ | policy="
                             + (settings.items().modern() == null ? "inactive" : settings.items().modern().preserveSyncY() ? "preserve-y" : "before-sync"));
                 }
+            } else if (args[0].equalsIgnoreCase("gui") && args.length == 1) {
+                if (!(sender instanceof Player player)) { sender.sendMessage("/kb gui can only be opened by a player"); return true; }
+                gui.open(player);
             } else if (args[0].equalsIgnoreCase("list") && args.length == 1) {
                 sender.sendMessage(String.join(", ", new TreeSet<>(profiles())));
             } else if (args[0].equalsIgnoreCase("view") && args.length == 2) {
@@ -174,7 +181,7 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
                 if (!args[2].equalsIgnoreCase("true") && !args[2].equalsIgnoreCase("false")) throw new IllegalArgumentException("Use true or false");
                 boolean value = Boolean.parseBoolean(args[2]);
                 update(sender, () -> setExcluded(id, value));
-            } else sender.sendMessage("/mkb status|list|view <profile>|reload|get <player/uuid>|setprofile <player/uuid> <profile>|exclude <player/uuid> <true/false>");
+            } else sender.sendMessage("/kb gui | /mkb status|list|view <profile>|reload|get <player/uuid>|setprofile <player/uuid> <profile>|exclude <player/uuid> <true/false>");
         } catch (IllegalArgumentException ex) { sender.sendMessage("ModernKnockBack: " + ex.getMessage()); }
         return true;
     }
@@ -184,6 +191,47 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
             validateAssignments(candidate);
             settings = candidate;
             refreshCombat();
+        }
+    }
+    private void editGuiProfile(Player player, KnockbackGui.Edit edit) {
+        if (!updating.compareAndSet(false, true)) {
+            player.sendMessage("ModernKnockBack: another configuration operation is still running");
+            return;
+        }
+        try {
+            Bukkit.getAsyncScheduler().runNow(this, task -> {
+                String result;
+                try {
+                    synchronized (configurationLock) {
+                        if (settings.mode() != edit.mode()) throw new IllegalStateException("Mode changed; reopen /kb gui");
+                        Settings candidate = modes.editProfile(edit.mode(), edit.profile(), edit.path(), edit.value());
+                        validateAssignments(candidate);
+                        settings = candidate;
+                        refreshCombat();
+                    }
+                    result = "ModernKnockBack: " + edit.profile() + "." + edit.path() + " = " + edit.value();
+                } catch (RuntimeException | IOException ex) {
+                    result = "ModernKnockBack: edit failed; previous settings retained. " + ex.getMessage();
+                    getLogger().log(java.util.logging.Level.WARNING, result, ex);
+                }
+                String message = result;
+                try {
+                    var scheduled = player.getScheduler().run(this, callback -> {
+                        try {
+                            if (!player.isOnline()) return;
+                            if (gui.isOpen(player)) gui.open(player, edit);
+                            player.sendMessage(message);
+                        } finally { updating.set(false); }
+                    }, null);
+                    if (scheduled == null) updating.set(false);
+                } catch (RuntimeException ex) {
+                    updating.set(false);
+                    getLogger().log(java.util.logging.Level.WARNING, "Could not return to the KB menu", ex);
+                }
+            });
+        } catch (RuntimeException ex) {
+            updating.set(false);
+            player.sendMessage("ModernKnockBack: edit could not be queued. " + ex.getMessage());
         }
     }
     private UUID resolve(String input) {
@@ -216,7 +264,7 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
             String prefix = args.length == 1 ? args[0].toLowerCase(Locale.ROOT) : "";
             return args.length <= 1 ? List.of("classic", "modern", "reload").stream().filter(s -> s.startsWith(prefix)).toList() : List.of();
         }
-        Collection<String> choices = args.length == 1 ? List.of("status", "reload", "list", "view", "get", "setprofile", "exclude")
+        Collection<String> choices = args.length == 1 ? List.of("gui", "status", "reload", "list", "view", "get", "setprofile", "exclude")
                 : args.length == 2 && args[0].equalsIgnoreCase("view") || args.length == 3 && args[0].equalsIgnoreCase("setprofile") ? profiles()
                 : args.length == 3 && args[0].equalsIgnoreCase("exclude") ? List.of("true", "false") : List.of();
         String prefix = args.length == 0 ? "" : args[args.length - 1].toLowerCase(Locale.ROOT);

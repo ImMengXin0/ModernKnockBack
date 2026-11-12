@@ -9,10 +9,22 @@ import org.bukkit.configuration.file.YamlConfiguration;
 
 /** Non-destructive first-run migration and durable mode selection. */
 public final class ModeFiles {
+    private static final Set<String> GUI_PROFILE_FIELDS = Set.of("enabled", "classic.horizontal-ground", "classic.horizontal-air",
+            "classic.vertical-ground", "classic.vertical-air", "classic.sprint-horizontal", "classic.sprint-vertical",
+            "classic.enchantment-horizontal", "classic.horizontal-retention", "classic.vertical-retention", "classic.vertical-max",
+            "classic.respect-resistance", "classic.y-limit-enabled", "classic.max-height", "classic.vertical-after-limit",
+            "horizontal.ground", "horizontal.air", "vertical.ground", "vertical.air", "modern.sprint-multiplier",
+            "modern.critical-multiplier", "modern.weak-hit-multiplier", "limits.horizontal", "limits.upward", "limits.downward",
+            "native.enabled", "native.horizontal-retention-ground", "native.horizontal-retention-air",
+            "native.vertical-retention-ground", "native.vertical-max-ground", "native.air-vertical-mode", "native.vertical-max-air",
+            "rod.enabled", "rod.cast-interval-ticks", "rod.recast-delay-ticks", "rod.horizontal-speed-multiplier",
+            "rod.vertical-speed-multiplier", "rod.gravity-multiplier", "rod.max-distance", "rod.max-lifetime-ticks",
+            "rod.impact-strength");
     private final Path root;
     private final Consumer<String> report;
     public ModeFiles(Path root) { this(root, message -> {}); }
     public ModeFiles(Path root, Consumer<String> report) { this.root = root.toAbsolutePath(); this.report = Objects.requireNonNull(report); }
+    public static boolean editableProfileField(String key) { return GUI_PROFILE_FIELDS.contains(key); }
     public void initialize() throws IOException {
         for (CombatMode mode : CombatMode.values()) {
             Path directory = root.resolve(mode.key());
@@ -77,6 +89,29 @@ public final class ModeFiles {
             ConfigCompletion.saveValidated(root, drafts, report);
             return candidate;
         } catch (IOException ex) { throw new IllegalStateException("Cannot complete " + mode.key() + " configuration; previous runtime state retained", ex); }
+    }
+    public synchronized Settings editProfile(CombatMode mode, String profile, String key, Object value) throws IOException {
+        Objects.requireNonNull(mode); Objects.requireNonNull(profile); Objects.requireNonNull(key); Objects.requireNonNull(value);
+        if (!profile.matches("[a-zA-Z0-9_-]+") || !GUI_PROFILE_FIELDS.contains(key))
+            throw new IllegalArgumentException("Unsupported GUI profile field");
+        Path file = root.resolve(mode.key()).resolve("profiles.yml");
+        byte[] original = Files.readAllBytes(file);
+        var yaml = YamlFiles.load(file);
+        String target = profile.equals("defaults") ? "defaults" : "profiles." + profile;
+        if (!yaml.isConfigurationSection(target)) throw new IllegalArgumentException("Unknown profile: " + profile);
+        yaml.set(target + "." + key, value);
+        try {
+            YamlFiles.save(file, yaml);
+            Settings candidate = load(mode);
+            if (!profile.equals("defaults") && !candidate.profiles().containsKey(profile))
+                throw new IllegalArgumentException("Unknown profile: " + profile);
+            return candidate;
+        } catch (RuntimeException | IOException failure) {
+            try { YamlFiles.write(file, new String(original, java.nio.charset.StandardCharsets.UTF_8)); }
+            catch (IOException restore) { failure.addSuppressed(restore); }
+            if (failure instanceof IOException io) throw io;
+            throw failure;
+        }
     }
     public void save(CombatMode mode) throws IOException {
         var yaml = new YamlConfiguration();

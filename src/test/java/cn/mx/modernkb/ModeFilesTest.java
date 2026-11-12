@@ -238,4 +238,38 @@ public class ModeFilesTest {
         }
         assertEquals(1, new KnockbackProfile.Rod(true, 2, 0, 1, 1, 24, 0, 0.4).gravityMultiplier(), 0);
     }
+    @Test public void guiProfileEditsAreValidatedPersistedAndScopedToTheSelectedMode() throws Exception {
+        Path root = temporary.getRoot().toPath();
+        ModeFiles files = new ModeFiles(root); files.initialize();
+        Path classicFile = root.resolve("classic/profiles.yml");
+        Path modernFile = root.resolve("modern/profiles.yml");
+        String untouchedModern = Files.readString(modernFile);
+        Settings changed = files.editProfile(CombatMode.CLASSIC, "player", "classic.horizontal-ground", .72);
+        assertEquals(.72, changed.profiles().get("player").classic().horizontalGround(), 0);
+        assertEquals(.72, files.load(CombatMode.CLASSIC).profiles().get("player").classic().horizontalGround(), 0);
+        assertEquals(untouchedModern, Files.readString(modernFile));
+        String beforeInvalidEdit = Files.readString(classicFile);
+        assertThrows(IllegalArgumentException.class, () -> files.editProfile(CombatMode.CLASSIC,
+                "player", "classic.horizontal-ground", 5.0));
+        assertEquals(beforeInvalidEdit, Files.readString(classicFile));
+        assertThrows(IllegalArgumentException.class, () -> files.editProfile(CombatMode.CLASSIC,
+                "player", "config.enabled", false));
+        assertThrows(IllegalArgumentException.class, () -> files.editProfile(CombatMode.CLASSIC,
+                "missing", "classic.horizontal-ground", .8));
+        Settings modern = files.editProfile(CombatMode.MODERN, "player", "horizontal.air", .81);
+        assertEquals(.81, modern.profiles().get("player").airHorizontal(), 0);
+        assertEquals(.72, files.load(CombatMode.CLASSIC).profiles().get("player").classic().horizontalGround(), 0);
+    }
+    @Test public void guiDefaultEditsUpdateInheritedProfilesButKeepExplicitOverrides() throws Exception {
+        Path root = temporary.newFolder("defaults").toPath();
+        ModeFiles files = new ModeFiles(root); files.initialize();
+        Settings defaults = files.editProfile(CombatMode.CLASSIC, "defaults", "classic.horizontal-ground", .65);
+        assertEquals(.65, defaults.profiles().get("player").classic().horizontalGround(), 0);
+        assertEquals(.65, defaults.profiles().get("arrow").classic().horizontalGround(), 0);
+        Settings override = files.editProfile(CombatMode.CLASSIC, "player", "classic.horizontal-ground", .9);
+        assertEquals(.9, override.profiles().get("player").classic().horizontalGround(), 0);
+        Settings changedDefault = files.editProfile(CombatMode.CLASSIC, "defaults", "classic.horizontal-ground", .7);
+        assertEquals(.9, changedDefault.profiles().get("player").classic().horizontalGround(), 0);
+        assertEquals(.7, changedDefault.profiles().get("arrow").classic().horizontalGround(), 0);
+    }
 }

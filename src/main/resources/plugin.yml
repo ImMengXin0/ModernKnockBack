@@ -1,5 +1,5 @@
 name: ModernKnockBack
-version: '2.6.0'
+version: '2.7.0'
 main: cn.mx.modernkb.ModernKnockbackPlugin
 api-version: '1.21.11'
 folia-supported: true
@@ -12,7 +12,7 @@ commands:
     usage: /kbtest classic|modern|reload
     permission: modernkb.admin
   modernkb:
-    aliases: [mkb]
+    aliases: [mkb, kb]
     description: Modern knockback configuration and diagnostics
     permission: modernkb.admin
 permissions:

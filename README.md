@@ -1,10 +1,11 @@
-# ModernKnockBack 2.6.0
+# ModernKnockBack 2.7.0
 
 [下载 Release](https://github.com/ImMengXin0/ModernKnockBack/releases/latest) · [反馈问题](https://github.com/ImMengXin0/ModernKnockBack/issues)
 
 Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackManager 的分类配置思路，针对现代 Paper 事件与 Folia 调度重新实现，不依赖旧插件或 ThePit 核心。
 
 - `/kbtest classic|modern` 切换经典无蓄力攻击/旧版向量与现代战斗，保存模式并在重启后继续使用。
+- `/kb gui` 打开当前模式的 KB 菜单；提供全局默认值和各 profile 的参数分类、说明、调节及即时保存。Classic 和 Modern 分别写入各自的 `profiles.yml`。
 - `classic/` 和 `modern/` 独立配置目录，升级自动迁移已有现代配置。
 - Classic 的 `classic/item.yml` 支持指定主手物品使用高版本原生攻击与 Modern KB，默认全部 7 种长矛及重锤，支持 reload，见 [物品例外](docs/ITEM-COMBAT.md)。
 - 启动、切换模式及重载时自动补全当前模式缺失配置；保留已配置数值、旧字段与自定义 profile，修改前自动备份。
@@ -31,7 +32,9 @@ Minecraft **1.21.11 / Java 21+** 的独立击退配置插件。沿用 KnockbackM
 
 文档：[中文配置与接口说明](docs/GUIDE-zh_CN.md)、[双模式与攻击节奏](docs/COMBAT-MODES.md)、[现代原生公式](docs/NATIVE-KB.md)、[配置自动补全](docs/CONFIG-COMPLETION.md)、[鱼竿接刀防叠击](docs/CLASSIC-ROD-STACK.md)、[验证记录](docs/VERIFICATION.md)。狂暴连击、死神不做专属调参。
 
-构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.6.0.jar`。
+构建：`mvn package`（包含测试）。产物：`target/ModernKnockBack-2.7.0.jar`。
+
+2.7.0 新增 `/kb gui` 游戏内配置菜单。菜单随当前模式显示 Classic 或 Modern 参数，可按全局默认值或 profile 调节，并即时校验、保存和应用；各模式独立写入自己的 `profiles.yml`。参数附带说明、取值范围和步长，详见 [2.7.0 发布说明](docs/RELEASE-2.7.0.md)。
 
 2.6.0 让 Classic 向量忽略下界合金护甲自带的抗击退，普通攻击、疾跑、鱼竿和弓箭均适用；保留基础与自定义抗性，Modern 及现代武器例外沿用原生规则，无需新增配置。见 [2.6.0 发布说明](docs/RELEASE-2.6.0.md)。
 
