@@ -1,4 +1,4 @@
-# ModernKnockBack 2.7.0
+# ModernKnockBack 2.8.0
 
 Minecraft 1.21.11 / Java 21+。本页只说明 Classic、Modern 配置参数和管理命令。
 
@@ -8,6 +8,7 @@ Minecraft 1.21.11 / Java 21+。本页只说明 Classic、Modern 配置参数和�
 
 | 命令 | 作用 |
 |---|---|
+| `/mkb help` | 查看中文命令帮助。 |
 | `/kb gui` | 打开当前模式的配置菜单；仅玩家可用。菜单可选择默认值或 profile，修改后立即校验、保存并应用。 |
 | `/mkb` 或 `/mkb status` | 查看插件、服务器、当前模式、profile 数量、击退处理统计、KnockbackSync 状态，以及 Classic 的受击间隔和保护状态。 |
 | `/mkb list` | 列出当前模式可用的 profile。 |

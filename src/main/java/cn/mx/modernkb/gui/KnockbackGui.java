@@ -1,5 +1,6 @@
 package cn.mx.modernkb.gui;
 
+import cn.mx.modernkb.Messages;
 import cn.mx.modernkb.ModernKnockbackPlugin;
 import cn.mx.modernkb.api.CombatMode;
 import cn.mx.modernkb.config.KnockbackProfile;
@@ -17,6 +18,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
@@ -30,6 +32,8 @@ public final class KnockbackGui implements Listener {
 
     private enum Screen { PROFILES, SECTIONS, PARAMETERS }
     private static final int PAGE_SIZE = 12;
+    private static final String SEP = "§8" + "-".repeat(20);
+    private static final Material FILLER = Material.GRAY_STAINED_GLASS_PANE;
     private final ModernKnockbackPlugin plugin;
     private final Supplier<Settings> settings;
     private final Editor editor;
@@ -41,6 +45,7 @@ public final class KnockbackGui implements Listener {
     }
 
     public void open(Player player) {
+        if (!authorized(player)) return;
         Settings current = settings.get();
         openProfiles(player, current.mode(), current);
     }
@@ -50,6 +55,7 @@ public final class KnockbackGui implements Listener {
     }
 
     public void open(Player player, Edit edit) {
+        if (!authorized(player)) return;
         Settings current = settings.get();
         if (edit.mode() != current.mode() || !current.profiles().containsKey(edit.profile())) {
             if (edit.mode() == current.mode() && edit.profile().equals("defaults")) {
@@ -67,11 +73,19 @@ public final class KnockbackGui implements Listener {
         Inventory top = event.getView().getTopInventory();
         if (!(top.getHolder() instanceof MenuHolder holder)) return;
         event.setCancelled(true);
+        if (!authorized(player)) return;
         if (event.getClickedInventory() != top || event.getRawSlot() < 0 || event.getRawSlot() >= top.getSize()) return;
+        if (event.getClick() != ClickType.LEFT) return;
         Settings current = settings.get();
         if (current.mode() != holder.mode) {
             openProfiles(player, current.mode(), current);
-            player.sendMessage("模式已切换，已打开当前模式配置。");
+            Messages.tip(player, "模式已切换，已打开当前模式的配置");
+            return;
+        }
+        if (holder.profile != null && !holder.profile.equals("defaults")
+                && !current.profiles().containsKey(holder.profile)) {
+            openProfiles(player, current.mode(), current);
+            Messages.tip(player, "该 profile 已被移除，已返回配置列表");
             return;
         }
         switch (holder.screen) {
@@ -83,6 +97,13 @@ public final class KnockbackGui implements Listener {
 
     @EventHandler public void drag(InventoryDragEvent event) {
         if (event.getView().getTopInventory().getHolder() instanceof MenuHolder) event.setCancelled(true);
+    }
+
+    private boolean authorized(Player player) {
+        if (player.hasPermission("modernkb.admin")) return true;
+        player.closeInventory();
+        Messages.err(player, "缺少权限节点 §7modernkb.admin");
+        return false;
     }
 
     private void clickProfile(Player player, MenuHolder holder, Settings current, int slot) {
@@ -139,37 +160,54 @@ public final class KnockbackGui implements Listener {
         List<String> profiles = sortedProfiles(current);
         int pageCount = Math.max(1, (profiles.size() + 44) / 45);
         int selectedPage = Math.clamp(page, 0, pageCount - 1);
-        MenuHolder holder = new MenuHolder(Screen.PROFILES, mode, null, null, selectedPage, "KB | " + mode.key() + " | Profiles");
+        MenuHolder holder = new MenuHolder(Screen.PROFILES, mode, null, null, selectedPage,
+                "§8KB §f" + mode.key() + " §8| Profiles");
         int start = selectedPage * 45;
         for (int slot = 0; slot < 45 && start + slot < profiles.size(); slot++) {
             String name = profiles.get(start + slot);
             KnockbackProfile profile = selectedProfile(current, name);
-            Material icon = profile.enabled() ? Material.ENCHANTED_BOOK : Material.BARRIER;
+            boolean enabled = profile.enabled();
+            Material icon = enabled ? Material.ENCHANTED_BOOK : Material.BARRIER;
             String displayName = name.equals("defaults") ? "全局默认值" : name;
-            holder.inventory.setItem(slot, item(icon, "§f" + displayName, List.of(
-                    "§7模式: §f" + mode.key(), "§7水平KB: §f" + format(profile, mode),
-                    "§7当前配置: " + (profile.enabled() ? "启用" : "停用"))));
+            holder.inventory.setItem(slot, item(icon, (enabled ? "§a" : "§c") + displayName, List.of(
+                    SEP,
+                    "§7模式   §8» §f" + mode.key(),
+                    "§7水平KB §8» §f" + format(profile, mode),
+                    "§7状态   §8» " + (enabled ? "§a启用" : "§c停用"),
+                    "§8",
+                    "§e[>] §7点击进入参数编辑")));
         }
+        fill(holder.inventory, 0, 45);
         footer(holder.inventory, 45, Material.BARRIER, "关闭菜单", true);
         footer(holder.inventory, 48, Material.ARROW, "上一页", selectedPage > 0);
-        holder.inventory.setItem(49, item(Material.BOOK, "§e当前模式: " + mode.key(), List.of(
-                "§7配置文件: " + mode.key() + "/profiles.yml", "§7Profile 数量: " + profiles.size())));
+        holder.inventory.setItem(49, item(Material.BOOK, "§e" + mode.key() + " §8» §fProfile 列表", List.of(
+                SEP,
+                "§7配置文件 §8» §f" + mode.key() + "/profiles.yml",
+                "§7Profile 数 §8» §f" + profiles.size(),
+                "§7页码     §8» §f" + (selectedPage + 1) + "§8/§f" + pageCount)));
         footer(holder.inventory, 50, Material.ARROW, "下一页", selectedPage + 1 < pageCount);
         player.openInventory(holder.inventory);
     }
 
     private void openSections(Player player, Settings current, String profile) {
         CombatMode mode = current.mode();
-        MenuHolder holder = new MenuHolder(Screen.SECTIONS, mode, profile, null, 0, "KB | " + mode.key() + " | " + profile);
+        MenuHolder holder = new MenuHolder(Screen.SECTIONS, mode, profile, null, 0,
+                "§8KB §f" + mode.key() + " §8| §f" + profile);
+        fill(holder.inventory, 0, 27);
         Material[] icons = {Material.IRON_SWORD, Material.REPEATER, Material.FISHING_ROD};
+        String[] accents = {"§c", "§e", "§b"};
         int[] slots = {11, 13, 15};
         for (int i = 0; i < slots.length; i++) {
             var section = GuiParameterCatalog.sections().get(i);
-            holder.inventory.setItem(slots[i], item(icons[i], "§f" + section.title(), List.of(
-                    "§7" + section.description(), "§7profile: §f" + profile)));
+            holder.inventory.setItem(slots[i], item(icons[i], accents[i] + section.title(), List.of(
+                    SEP,
+                    "§7" + section.description(),
+                    "§8",
+                    "§7profile §8» §f" + profile,
+                    "§e[>] §7点击展开参数")));
         }
-        holder.inventory.setItem(4, item(Material.BOOK, "§e" + mode.key() + " | " + profile,
-                List.of("§7参数只写入当前模式的 profiles.yml。")));
+        holder.inventory.setItem(4, item(Material.BOOK, "§e" + mode.key() + " §8» §f" + profile,
+                List.of(SEP, "§7参数只写入当前模式的 profiles.yml。", "§7修改后立即校验并生效。")));
         footer(holder.inventory, 18, Material.ARROW, "返回 profile 列表", true);
         footer(holder.inventory, 26, Material.BARRIER, "关闭菜单", true);
         player.openInventory(holder.inventory);
@@ -182,7 +220,7 @@ public final class KnockbackGui implements Listener {
         int pageCount = Math.max(1, (parameters.size() + PAGE_SIZE - 1) / PAGE_SIZE);
         int selectedPage = Math.clamp(page, 0, pageCount - 1);
         MenuHolder holder = new MenuHolder(Screen.PARAMETERS, mode, profile, section, selectedPage,
-                "KB | " + mode.key() + " | " + section.title());
+                "§8KB §f" + mode.key() + " §8| §f" + section.title());
         KnockbackProfile values = selectedProfile(current, profile);
         int start = selectedPage * PAGE_SIZE;
         for (int offset = 0; offset < PAGE_SIZE && start + offset < parameters.size(); offset++) {
@@ -193,16 +231,19 @@ public final class KnockbackGui implements Listener {
             Object value = parameter.value(values);
             if (parameter.kind() == GuiParameterCatalog.Kind.NUMBER) {
                 String amount = GuiParameterCatalog.Parameter.format(parameter.step());
-                holder.inventory.setItem(base, item(Material.REDSTONE, "§c减少 " + amount,
-                        List.of("§7" + parameter.label(), "§7调整幅度: " + amount)));
-                holder.inventory.setItem(base + 2, item(Material.EMERALD, "§a增加 " + amount,
-                        List.of("§7" + parameter.label(), "§7调整幅度: " + amount)));
+                holder.inventory.setItem(base, item(Material.REDSTONE, "§c- " + amount,
+                        List.of(SEP, "§7参数 §8» §f" + parameter.label(),
+                                "§7调整幅度 §8» §f" + amount, "§8", "§c[左键] §7数值减小")));
+                holder.inventory.setItem(base + 2, item(Material.EMERALD, "§a+ " + amount,
+                        List.of(SEP, "§7参数 §8» §f" + parameter.label(),
+                                "§7调整幅度 §8» §f" + amount, "§8", "§a[左键] §7数值增大")));
             } else {
-                holder.inventory.setItem(base, item(Material.GRAY_STAINED_GLASS_PANE, " ", List.of()));
-                holder.inventory.setItem(base + 2, item(Material.GRAY_STAINED_GLASS_PANE, " ", List.of()));
+                holder.inventory.setItem(base, item(FILLER, " ", List.of()));
+                holder.inventory.setItem(base + 2, item(FILLER, " ", List.of()));
             }
             holder.inventory.setItem(base + 1, parameter(parameter, value));
         }
+        fill(holder.inventory, 36, 45);
         footer(holder.inventory, 45, Material.BOOK, "profile 列表", true);
         footer(holder.inventory, 48, Material.ARROW, "返回参数分类", true);
         footer(holder.inventory, 50, Material.ARROW, "上一页", selectedPage > 0);
@@ -218,13 +259,40 @@ public final class KnockbackGui implements Listener {
             case CHOICE -> Material.COMPARATOR;
         };
         var lore = new ArrayList<String>();
-        lore.add("§7当前值: §f" + GuiParameterCatalog.Parameter.format(value));
+        lore.add(SEP);
+        lore.add("§7当前值 §8» §a" + GuiParameterCatalog.Parameter.format(value));
+        lore.add("§8");
         lore.add("§7" + parameter.explanation());
-        if (parameter.kind() == GuiParameterCatalog.Kind.NUMBER)
-            lore.add("§8范围 " + GuiParameterCatalog.Parameter.format(parameter.min()) + " .. "
-                    + GuiParameterCatalog.Parameter.format(parameter.max()) + " | 步长 "
-                    + GuiParameterCatalog.Parameter.format(parameter.step()));
-        return item(icon, "§f" + parameter.label() + ": " + GuiParameterCatalog.Parameter.format(value), lore);
+        lore.add("§8");
+        if (parameter.kind() == GuiParameterCatalog.Kind.NUMBER) {
+            lore.add("§7范围位置 §8» " + gauge(((Number) value).doubleValue(), parameter.min(), parameter.max()));
+            lore.add("§7范围 §f" + GuiParameterCatalog.Parameter.format(parameter.min())
+                    + " §7.. §f" + GuiParameterCatalog.Parameter.format(parameter.max())
+                    + " §8| §7步长 §f" + GuiParameterCatalog.Parameter.format(parameter.step()));
+        } else {
+            lore.add("§7类型 §8» §f" + (parameter.kind() == GuiParameterCatalog.Kind.BOOLEAN ? "开关" : "二选一"));
+            lore.add("§e[>] §7点击切换当前值");
+        }
+        lore.add("§8配置项: " + parameter.path());
+        return item(icon, "§b" + parameter.label() + " §8» §f" + GuiParameterCatalog.Parameter.format(value), lore);
+    }
+
+    /** Renders a 12-cell bar showing where the value sits inside its allowed range. */
+    private static String gauge(double value, double min, double max) {
+        int total = 12;
+        double ratio = max > min ? (value - min) / (max - min) : 0;
+        ratio = Math.clamp(ratio, 0, 1);
+        int filled = (int) Math.round(ratio * total);
+        return "§a" + "|".repeat(filled) + "§8" + "|".repeat(total - filled)
+                + " §7" + Math.round(ratio * 100) + "%";
+    }
+
+    /** Fills empty slots in {@code [from, to)} with the menu background pane. */
+    private static void fill(Inventory inventory, int from, int to) {
+        ItemStack pane = item(FILLER, " ", List.of());
+        for (int slot = from; slot < to; slot++) {
+            if (inventory.getItem(slot) == null) inventory.setItem(slot, pane);
+        }
     }
 
     static List<String> sortedProfiles(Settings current) {
@@ -245,8 +313,9 @@ public final class KnockbackGui implements Listener {
     }
 
     private static void footer(Inventory inventory, int slot, Material icon, String label, boolean enabled) {
-        inventory.setItem(slot, item(enabled ? icon : Material.GRAY_STAINED_GLASS_PANE,
-                enabled ? "§e" + label : "§8" + label, List.of()));
+        inventory.setItem(slot, enabled
+                ? item(icon, "§e" + label, List.of("§8[左键] §7执行"))
+                : item(FILLER, "§8" + label, List.of("§8当前不可用")));
     }
 
     private static ItemStack item(Material material, String name, List<String> lore) {
