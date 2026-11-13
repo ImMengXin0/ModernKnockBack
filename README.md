@@ -1,10 +1,10 @@
-# ModernKnockBack 2.8.0
+# ModernKnockBack 3.0.0
 
 Minecraft 1.21.11 / Java 21+。本页只说明 Classic、Modern 配置参数和管理命令。
 
 ## 命令
 
-`/modernkb`、`/mkb`、`/kb` 是同一组命令别名；`/kbtest` 用于切换模式或重载。所有命令要求 `modernkb.admin` 权限，默认授予 OP。
+`/modernkb`、`/mkb`、`/kb` 是同一组命令别名；`/kbtest` 用于切换模式、重载或检测 KB。所有命令要求 `modernkb.admin` 权限，默认授予 OP。
 
 | 命令 | 作用 |
 |---|---|
@@ -17,6 +17,10 @@ Minecraft 1.21.11 / Java 21+。本页只说明 Classic、Modern 配置参数和�
 | `/kbtest classic` | 切换到 Classic 模式。模式会保存并在服务器重启后继续使用。 |
 | `/kbtest modern` | 切换到 Modern 模式。模式会保存并在服务器重启后继续使用。 |
 | `/kbtest reload` | 重载当前模式的配置。 |
+| `/kbtest profiler open` | 开始记录当前模式的 KB、速度事件、短时位移和 Ping，并保存完整有效参数与插件环境快照。Classic 的 Modern 物品例外单独标识；切换模式、reload 和 GUI 改参会追加参数快照。 |
+| `/kbtest profiler stop` | 停止并在后台生成 `profiler/kb-<会话ID>.html`，返回服务器本机文件链接。报告自带统计图、分析图、筛选和完整参数，下载到本机即可离线查看。 |
+| `/kbtest profiler status` | 查看采集状态和已记录事件数量。 |
+| `/kbtest profiler report` | 再次显示本次插件运行期间最近生成的报告位置和可复制文件链接。 |
 | `/mkb get <玩家名或UUID>` | 查看玩家当前 profile 和是否被排除。玩家名仅能解析在线玩家；离线玩家请用 UUID。 |
 | `/mkb setprofile <玩家名或UUID> <profile>` | 为玩家指定 profile。使用 `default` 恢复按击打类型自动选择。 |
 | `/mkb exclude <玩家名或UUID> <true/false>` | 设置是否排除此玩家；排除只停止本插件修改，不会取消原版击退。 |
@@ -31,8 +35,13 @@ Minecraft 1.21.11 / Java 21+。本页只说明 Classic、Modern 配置参数和�
 | `classic/profiles.yml`、`modern/profiles.yml` | 击退参数。`defaults` 提供继承值；`profiles.<名称>` 只需写出要覆盖的字段。 |
 | `classic/combat.yml` | Classic 攻击间隔、疾跑、jump reset、CPS 密度和战斗反馈。 |
 | `classic/item.yml` | Classic 模式下使用高版本原生攻击机制的主手物品列表。 |
+| `profiler/*.html` | `/kbtest profiler stop` 生成的离线 KB 报告；每次检测独立保存，不覆盖旧报告。 |
 
 选 profile 的优先级：精确 `matchups` → 玩家手动分配的非 `default` profile（`respect-player-profile: true` 时）→ 类型路由 → `default`。`profiles.yml` 中未写出的字段继承 `defaults`。profile 自己的 `enabled: false` 只关闭该 profile；`config.yml` 的 `enabled: false` 关闭整套模式配置。
+
+Profiler 无需新增配置项，最多记录 15 分钟或 10000 条 KB 事件，达到限制会自动停止并导出；插件正常卸载也会保存进行中的检测。未开启时只检查采集状态。报告包含原始事件向量、计算结果、本插件写入值、MONITOR 阶段观察值、相关速度事件与受击后三 tick 的位移；新受击打断或切换世界的位移会标记，不混入轨迹分析。Classic 的参数是目标速度，Paper KB 事件记录的是增量，`PlayerVelocityEvent` 是速度，不能直接当作同一量比较。速度事件仅按同一受击者最近三 tick 关联，属于观察候选，不证明该速度一定来自这次受击。
+
+报告的 Ping 是服务器提供的往返延迟估计，事件处理耗时和 KB 到速度事件的时间仅代表服务端阶段；无法据此测量客户端收包时间或真实丢包率。插件列表、监听顺序和向量改写只帮助排查相关性，不自动认定某个插件造成了改写。HTML 不上传数据、不依赖外部网站；文件链接指向服务器磁盘，远程管理员应下载 HTML 后打开。报告会包含参测玩家名称与 UUID，应按管理数据保管。
 
 ## 两种模式共用的 `config.yml`
 

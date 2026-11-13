@@ -3,6 +3,7 @@ package cn.mx.modernkb;
 import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.combat.*;
 import cn.mx.modernkb.config.*;
+import cn.mx.modernkb.profiler.KnockbackProfiler;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import java.nio.file.Path;
 import java.util.*;
@@ -46,6 +47,23 @@ public class KnockbackListenerTest {
         assertEquals(0.4, event.getKnockback().getX(), 1e-12); assertEquals(0.9, event.getKnockback().getY(), 1e-12);
         verify(victim, never()).getVelocity(); verify(victim, never()).setVelocity(any());
         assertEquals(1, listener.handled());
+    }
+    @Test public void profilerReceivesActualConfigurationAndAppliedVectorsWithoutAlteringCalculation() {
+        var profiler = mock(KnockbackProfiler.class);
+        listener = new KnockbackListener(() -> settings, players, tracker, () -> false, null, profiler);
+        var event = event(); listener.knockback(event);
+        verify(profiler).context(same(event), any(HitContext.class), same(settings), same(settings), eq("default"));
+        verify(profiler).calculation(same(event), eq(event.getKnockback()), eq(false), anyString());
+        verify(profiler).applied(same(event), eq(event.getKnockback()));
+        verify(victim, never()).setVelocity(any());
+    }
+    @Test public void cancelledApiModificationIsObservedButNeverMarkedAsApplied() {
+        var profiler = mock(KnockbackProfiler.class);
+        listener = new KnockbackListener(() -> settings, players, tracker, () -> false, null, profiler);
+        doAnswer(invocation -> { if (invocation.getArgument(0) instanceof KnockbackModifyEvent e) e.setCancelled(true); return null; }).when(manager).callEvent(any());
+        var event = event(); listener.knockback(event);
+        verify(profiler).calculation(same(event), any(), eq(false), anyString());
+        verify(profiler, never()).applied(any(), any()); assertEquals(new Vector(.2, .3, -.1), event.getKnockback());
     }
     @Test public void cancelledSelectionLeavesOriginalImpulse() {
         doAnswer(invocation -> { if (invocation.getArgument(0) instanceof KnockbackProfileEvent e) e.setCancelled(true); return null; }).when(manager).callEvent(any());

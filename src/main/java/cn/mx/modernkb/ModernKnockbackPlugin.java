@@ -10,6 +10,7 @@ import cn.mx.modernkb.compat.LeafVelocityDispatch;
 import cn.mx.modernkb.config.*;
 import cn.mx.modernkb.gui.KnockbackGui;
 import cn.mx.modernkb.rod.RodListener;
+import cn.mx.modernkb.profiler.KnockbackProfiler;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -32,6 +33,7 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
     private PlayerPushRules pushing;
     private ClientCollisions collisions;
     private KnockbackGui gui;
+    private KnockbackProfiler profiler;
     private final AtomicBoolean updating = new AtomicBoolean();
     private final Object configurationLock = new Object();
 
@@ -55,9 +57,10 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
             pushing = new PlayerPushRules(this, () -> settings, players);
             collisions = new ClientCollisions(this, () -> settings, players);
             gui = new KnockbackGui(this, () -> settings, this::editGuiProfile);
-            knockback = new KnockbackListener(() -> settings, players, tracker, sync::active, classic);
+            profiler = new KnockbackProfiler(this, () -> settings, players, tracker, this::profilerCounters, sync::status);
+            knockback = new KnockbackListener(() -> settings, players, tracker, sync::active, classic, profiler);
             rods = new RodListener(this, () -> settings, players, tracker, classic, RodCollision.forServer());
-            for (var listener : List.of(tracker, sync, pushing, collisions, classic, knockback, rods, gui)) Bukkit.getPluginManager().registerEvents(listener, this);
+            for (var listener : List.of(tracker, sync, pushing, collisions, classic, knockback, rods, gui, profiler)) Bukkit.getPluginManager().registerEvents(listener, this);
             Bukkit.getServicesManager().register(ModernKnockbackAPI.class, this, this, ServicePriority.Normal);
             Objects.requireNonNull(getCommand("modernkb")).setExecutor(this);
             getCommand("modernkb").setTabCompleter(this);
@@ -78,6 +81,7 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
             throw new IllegalArgumentException("players.yml references missing profile: " + profile);
     }
     @Override public void onDisable() {
+        if (profiler != null) profiler.close();
         Bukkit.getServicesManager().unregisterAll(this);
         HandlerList.unregisterAll(this);
         Bukkit.getAsyncScheduler().cancelTasks(this);
@@ -101,6 +105,7 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
         }
     }
     private void refreshCombat() {
+        if (profiler != null) profiler.configurationChanged(settings);
         tracker.clear();
         rods.reset();
         classic.refreshAll();
@@ -132,12 +137,14 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
         }
         try {
             if (command.getName().equalsIgnoreCase("kbtest")) {
-                if (args.length == 1 && (args[0].equalsIgnoreCase("classic") || args[0].equalsIgnoreCase("modern"))) {
+                if (args.length == 2 && args[0].equalsIgnoreCase("profiler")) {
+                    profiler.command(sender, args[1]);
+                } else if (args.length == 1 && (args[0].equalsIgnoreCase("classic") || args[0].equalsIgnoreCase("modern"))) {
                     CombatMode mode = CombatMode.parse(args[0]);
                     update(sender, () -> setMode(mode));
                 } else if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
                     update(sender, this::reloadMode);
-                } else Messages.tip(sender, "用法 §e/kbtest classic|modern|reload §7当前模式 §b" + settings.mode().key());
+                } else Messages.tip(sender, "用法 §e/kbtest classic|modern|reload §8| §e/kbtest profiler open|stop|status|report §7当前模式 §b" + settings.mode().key());
                 return true;
             }
             if (args.length == 0 || args[0].equalsIgnoreCase("status")) {
@@ -286,6 +293,22 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
         Messages.plain(sender, Messages.RULE);
     }
 
+    private Map<String, Object> profilerCounters() {
+        Map<String, Object> values = new LinkedHashMap<>();
+        if (knockback != null) {
+            values.put("processedImpulses", knockback.handled());
+            values.put("nativeCalculations", knockback.nativeHandled());
+            values.put("nativeFallbacks", knockback.nativeFallbacks());
+            values.put("nativeMismatches", knockback.nativeMismatches());
+        }
+        if (classic != null) {
+            values.put("classicVectors", classic.applied());
+            values.put("blockedEarlyHits", classic.preventedHits());
+            values.put("deduplicatedComponents", classic.preventedComponents());
+        }
+        return values;
+    }
+
     private void help(CommandSender sender) {
         Messages.plain(sender, Messages.title("命令帮助"));
         Messages.plain(sender, Messages.usage("/mkb help", "查看命令帮助（别名 /kb、/modernkb）"));
@@ -299,14 +322,20 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
         Messages.plain(sender, Messages.usage("/mkb exclude <玩家|UUID> <true|false>", "设置是否跳过该玩家"));
         Messages.plain(sender, Messages.usage("/kbtest classic|modern", "切换战斗模式"));
         Messages.plain(sender, Messages.usage("/kbtest reload", "重载当前模式配置"));
+        Messages.plain(sender, Messages.usage("/kbtest profiler open|stop", "开始 KB 检测／停止并生成离线 HTML 报告"));
+        Messages.plain(sender, Messages.usage("/kbtest profiler status|report", "查看采集状态／最近一次报告文件链接"));
         Messages.plain(sender, Messages.RULE);
     }
 
     @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (!sender.hasPermission("modernkb.admin")) return List.of();
         if (command.getName().equalsIgnoreCase("kbtest")) {
+            if (args.length == 2 && args[0].equalsIgnoreCase("profiler")) {
+                String prefix = args[1].toLowerCase(Locale.ROOT);
+                return List.of("open", "stop", "status", "report").stream().filter(s -> s.startsWith(prefix)).toList();
+            }
             String prefix = args.length == 1 ? args[0].toLowerCase(Locale.ROOT) : "";
-            return args.length <= 1 ? List.of("classic", "modern", "reload").stream().filter(s -> s.startsWith(prefix)).toList() : List.of();
+            return args.length <= 1 ? List.of("classic", "modern", "reload", "profiler").stream().filter(s -> s.startsWith(prefix)).toList() : List.of();
         }
         Collection<String> choices = args.length == 1 ? List.of("help", "gui", "status", "reload", "list", "view", "get", "setprofile", "exclude")
                 : args.length == 2 && args[0].equalsIgnoreCase("view") || args.length == 3 && args[0].equalsIgnoreCase("setprofile") ? profiles()

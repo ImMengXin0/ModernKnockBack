@@ -1,5 +1,5 @@
 name: ModernKnockBack
-version: '2.8.0'
+version: '3.0.0'
 main: cn.mx.modernkb.ModernKnockbackPlugin
 api-version: '1.21.11'
 folia-supported: true
@@ -8,8 +8,8 @@ authors: [MX]
 softdepend: [KnockbackSync, Citizens]
 commands:
   kbtest:
-    description: 切换 Classic/Modern 战斗模式，或重载当前配置
-    usage: /kbtest classic|modern|reload
+    description: 切换战斗模式、重载配置或采集 KB 分析报告
+    usage: /kbtest classic|modern|reload 或 /kbtest profiler open|stop|status|report
     permission: modernkb.admin
     permission-message: '§8[§bKB§8]§r §c[!] §f缺少权限节点 §7modernkb.admin'
   modernkb:

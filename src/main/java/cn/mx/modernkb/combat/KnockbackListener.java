@@ -2,6 +2,7 @@ package cn.mx.modernkb.combat;
 
 import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.config.*;
+import cn.mx.modernkb.profiler.KnockbackProfiler;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.event.entity.EntityPushedByEntityAttackEvent;
 import java.util.concurrent.atomic.LongAdder;
@@ -18,6 +19,7 @@ public final class KnockbackListener implements Listener {
     private final CombatTracker tracker;
     private final BooleanSupplier sync;
     private final ClassicCombat classic;
+    private final KnockbackProfiler profiler;
     private final LongAdder handled = new LongAdder();
     private final LongAdder nativeHandled = new LongAdder();
     private final LongAdder nativeFallbacks = new LongAdder();
@@ -26,8 +28,13 @@ public final class KnockbackListener implements Listener {
         this(settings, players, tracker, sync, null);
     }
     public KnockbackListener(Supplier<Settings> settings, PlayerStore players, CombatTracker tracker, BooleanSupplier sync, ClassicCombat classic) {
+        this(settings, players, tracker, sync, classic, null);
+    }
+    public KnockbackListener(Supplier<Settings> settings, PlayerStore players, CombatTracker tracker, BooleanSupplier sync,
+                             ClassicCombat classic, KnockbackProfiler profiler) {
         this.settings = settings; this.players = players; this.tracker = tracker; this.sync = sync;
         this.classic = classic;
+        this.profiler = profiler;
     }
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void knockback(EntityKnockbackEvent event) {
@@ -52,6 +59,7 @@ public final class KnockbackListener implements Listener {
         if (!KnockbackMath.finite(original)) return;
         KnockbackProfileEvent selection = new KnockbackProfileEvent(context, combat.select(context, preference.profile()), combat.mode());
         Bukkit.getPluginManager().callEvent(selection);
+        if (profiler != null) profiler.context(event, context, config, combat, selection.getProfile());
         KnockbackProfile profile = combat.profiles().get(selection.getProfile());
         if (selection.isCancelled() || profile == null || !profile.enabled()) return;
         ClassicCombat.Calculation legacy = classic == null || modernItem ? null : classic.calculate(event, context, profile, config);
@@ -65,6 +73,7 @@ public final class KnockbackListener implements Listener {
                 calculation = NativeKnockbackMath.calculate(original, victim.getVelocity(), strength, context, profile);
             } else calculation = NativeKnockbackMath.fallback(original, context, profile, "unsupported-event");
         } else calculation = NativeKnockbackMath.fallback(original, context, profile, "");
+        if (profiler != null) profiler.calculation(event, calculation.impulse(), calculation.nativeApplied(), calculation.fallbackReason());
         var modification = new KnockbackModifyEvent(context, selection.getProfile(), original, calculation.impulse(),
                 calculation.nativeApplied(), calculation.fallbackReason(), combat.mode());
         Bukkit.getPluginManager().callEvent(modification);
@@ -72,6 +81,7 @@ public final class KnockbackListener implements Listener {
         Vector result = modification.getImpulse();
         if (context.syncOwnsVertical()) result.setY(original.getY());
         event.setKnockback(result);
+        if (profiler != null) profiler.applied(event, result);
         if (legacy != null) classic.prepare(event, context, config, legacy);
         handled.increment();
         if (calculation.nativeApplied()) nativeHandled.increment();
