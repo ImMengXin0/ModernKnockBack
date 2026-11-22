@@ -55,9 +55,9 @@ public final class ModernKnockbackPlugin extends JavaPlugin implements ModernKno
             LeafVelocityDispatch.initialize();
             classic = new ClassicCombat(this, () -> settings, players, tracker, RodVelocity.forServer());
             pushing = new PlayerPushRules(this, () -> settings, players);
-            collisions = new ClientCollisions(this, () -> settings, players);
             gui = new KnockbackGui(this, () -> settings, this::editGuiProfile);
             profiler = new KnockbackProfiler(this, () -> settings, players, tracker, this::profilerCounters, sync::status);
+            collisions = new ClientCollisions(this, () -> settings, players, profiler);
             knockback = new KnockbackListener(() -> settings, players, tracker, sync::active, classic, profiler);
             rods = new RodListener(this, () -> settings, players, tracker, classic, RodCollision.forServer());
             for (var listener : List.of(tracker, sync, pushing, collisions, classic, knockback, rods, gui, profiler)) Bukkit.getPluginManager().registerEvents(listener, this);

@@ -53,6 +53,7 @@
       <article class="panel"><div class="panel-head"><h3>Ping 与最终水平向量</h3><span class="pill">相关性观察</span></div><p class="description">未知 Ping 的样本保留在明细中，不参与此散点图。高延迟与较小击退同时出现，也不能证明存在因果关系。</p><div class="chart"><canvas id="ping-chart" role="img" aria-label="Ping 与击退向量散点图"></canvas></div><div class="chart-caption" id="ping-caption"></div></article>
       <article class="panel"><div class="panel-head"><h3>按 Ping 分组 · 水平向量</h3><span class="pill">组内均值</span></div><p class="description">分组为 0–49 / 50–99 / 100–149 / 150–249 / ≥250 ms；未知值独立展示。</p><div class="chart"><canvas id="ping-group-chart" role="img" aria-label="Ping 分组水平向量均值柱状图"></canvas></div><div class="chart-caption" id="ping-group-caption"></div></article>
       <article class="panel"><div class="panel-head"><h3>插件计算阶段耗时</h3><span class="pill">μs</span></div><p class="description">包含采样开销的服务端事件观察耗时；不代表服务器完整 tick，也不能据此判断客户端 FPS。</p><div class="chart"><canvas id="processing-chart" role="img" aria-label="插件计算阶段耗时分布"></canvas></div><div class="chart-caption" id="processing-caption"></div></article>
+      <article class="panel"><div class="panel-head"><h3>首个本人速度包 · 写出间隔</h3><span class="pill">ms</span></div><p class="description">从击退事件开始到向玩家连接提交第一个本地写出成功的实体速度包。按受击者和时间窗口关联；不代表客户端已收到。</p><div class="chart"><canvas id="motion-chart" role="img" aria-label="本人速度包写出间隔分布"></canvas></div></article>
       <article class="panel"><div class="panel-head"><h3>后续速度事件 · 观察间隔</h3><span class="pill">ms</span></div><p class="description">同一受击者最近三 tick 内的最新速度事件候选：从 KB LOWEST 到速度事件 MONITOR 的服务端间隔；不是逐包关联或收包确认。</p><div class="chart"><canvas id="velocity-chart" role="img" aria-label="后续速度事件候选观察间隔分布"></canvas></div><div class="chart-caption" id="velocity-caption"></div></article>
     </div>
     <div class="insights" id="insights"></div>
@@ -80,7 +81,7 @@
 (() => {
 const $ = id => document.getElementById(id);
 let data;
-try { data = JSON.parse($("profiler-data").textContent); if (!data || data.schema !== 1 || !Array.isArray(data.samples)) throw new Error("不支持的数据格式"); }
+try { data = JSON.parse($("profiler-data").textContent); if (!data || ![1, 2].includes(data.schema) || !Array.isArray(data.samples)) throw new Error("不支持的数据格式"); }
 catch (error) { $("fatal").textContent = "报告数据无法读取：" + error.message; $("fatal").classList.add("show"); return; }
 const samples = data.samples, snapshots = Array.isArray(data.configurations) ? data.configurations : [];
 let filtered = samples.slice(), page = 0, searchTimer;
@@ -148,10 +149,22 @@ function renderConditions() {
   body.replaceChildren();
   groups.forEach(([label, fn]) => { const group = filtered.filter(fn), s = stats(group), tr = el("tr"); cell(tr, label); [integer(s.count), number(s.h), number(s.y), number(s.p95), pct(s.cancelled, s.count), pct(s.velocity, s.count)].forEach(v => cell(tr, v, "number")); body.append(tr); });
 }
+const traceReasons = {complete:"完成", "session-ended":"会话已停止", "new-hit":"新击退分量", teleport:"传送", respawn:"重生", quit:"离线", death:"死亡", retired:"实体移除", "world-change":"切换世界", "sampling-gap":"采样缺失"};
+function traceOutcome(s) {
+  const points = s.trajectory || [];
+  if (s.traceStatus !== "complete" || points.length !== 6) return null;
+  const first = points.find(p => Math.hypot(p.dx, p.dy, p.dz) > .0001);
+  return first ? (first.tick > 2 ? "晚移" : "已移动") : "六 tick 未动";
+}
 function renderInsights() {
   const n = filtered.length, changed = filtered.filter(s => different(s.applied, s.final)).length, cancelled = filtered.filter(s => s.cancelled).length, velocity = filtered.filter(s => s.velocity), velocityChanged = velocity.filter(s => different(s.velocity.before, s.velocity.after)).length, velocityCancelled = velocity.filter(s => s.velocity.cancelled).length;
   const proc = values(filtered, s => s.processingMicros), delays = values(velocity, s => s.velocity.delayMs), movements = filtered.filter(s => s.movement), interruptions = movements.filter(s => s.movement.interrupted).length;
   const groups = [["插件提交之后的向量变化", integer(changed) + " 次", "比较插件提交值与 MONITOR 观察值。变化不能单独归因；若其他监听器在本采集器 MONITOR 之后改值，则无法保证可见。"], ["最终事件取消", integer(cancelled) + " 次", "占筛选事件 " + pct(cancelled, n) + "。取消事件保留在时间线和明细，强度统计与分布已排除它们。"], ["后续速度候选", pct(velocity.length, n), "观察 " + integer(velocity.length) + " 次；候选事件内部改写 " + integer(velocityChanged) + " 次、取消 " + integer(velocityCancelled) + " 次。同一命中可能出现多次速度事件，此处保留最新候选。"], ["计算阶段 P50 / P95", number(quantile(proc, .5), 1) + " / " + number(quantile(proc, .95), 1) + " μs", "最大 " + number(proc.length ? Math.max(...proc) : null, 1) + " μs。包含采样开销，只覆盖定义的事件观察阶段；不能直接解释为整 tick 或纯公式计算耗时。"], ["速度观察间隔 P50 / P95", number(quantile(delays, .5), 1) + " / " + number(quantile(delays, .95), 1) + " ms", "从 KB LOWEST 到最近三 tick 内最新速度候选的 MONITOR 阶段；同一受击者的候选关联不是精确逐包跟踪。"], ["完整后续位移观察", integer(movements.length - interruptions) + " 次", "另有 " + integer(interruptions) + " 次因后续受击等情况中断。中断记录不计入完整位移统计；位移还受输入、摩擦、地形和碰撞影响。"]];
+  if (data.schema >= 2) {
+    const complete = filtered.filter(s => traceOutcome(s) !== null), delayed = complete.filter(s => traceOutcome(s) === "晚移"), still = complete.filter(s => traceOutcome(s) === "六 tick 未动");
+    const ids = a => a.slice(0, 12).map(s => "#" + s.id).join("、") + (a.length > 12 ? "…" : "");
+    groups.push(["前两 tick 未动、之后移动", delayed.length + " / " + complete.length, "分母为完整六点轨迹；累计位移超过 0.0001 格视为移动。" + ids(delayed)], ["六 tick 均未动", still.length + " / " + complete.length, "不计中断或缺点的轨迹；不等于丢包。" + ids(still)]);
+  }
   $("insights").replaceChildren(...groups.map(([title, value, text]) => { const card = el("article", null, "insight"); card.append(el("div", title, "insight-title"), el("div", value, "insight-value"), el("p", text)); return card; }));
 }
 function renderEnvironment() {
@@ -184,6 +197,7 @@ function renderSamples() {
     const who = cell(tr, person(sample.victim), "break"); who.append(el("div", "← " + person(sample.attacker), "subtle"));
     cell(tr, ping(sample.victimPing) + " / " + ping(sample.attackerPing), "number mono"); cell(tr, number(horizontal(sample.final)) + " / " + number(vertical(sample.final)), "number mono");
     const status = cell(tr, sample.cancelled ? "最终取消" : sample.processed ? "已处理" : "仅观察"); if (sample.cancelled) status.classList.add("error-text"); status.append(el("div", sample.velocity ? "有速度观察" : "无速度观察", "subtle"));
+    const outcome = traceOutcome(sample); if (outcome && outcome !== "已移动") status.append(el("div", outcome, "pill warn"));
     const action = cell(tr), button = el("button", "详情 ↗", "detail-button"); button.type = "button"; button.addEventListener("click", () => detail(sample)); action.append(button); body.append(tr);
   });
   if (!filtered.length) emptyBody(body, 8, "当前筛选没有匹配的事件；请调整顶部条件。");
@@ -198,10 +212,27 @@ function detail(sample) {
   const body = $("detail-vectors"); body.replaceChildren();
   [["受击前速度 before", sample.before], ["原始事件增量 original", sample.original], ["插件计算增量 calculated", sample.calculated], ["插件提交增量 applied", sample.applied], ["最终事件增量 final", sample.final], ["before + final 相加预览", totalPreview(sample)], ["速度事件进入值", sample.velocity && sample.velocity.before], ["速度事件最终值", sample.velocity && sample.velocity.after]].forEach(([label, v]) => { const tr = el("tr"); cell(tr, label); const vec = vector(v); [vec && vec[0], vec && vec[1], vec && vec[2], horizontal(v)].forEach(value => cell(tr, number(value, 5), "number mono")); body.append(tr); });
   const observations = [];
+  if (finite(sample.damageMonitorToKbMs)) {
+    const motion = sample.motionPackets?.find(p => p.status === "written");
+    const gap = motion && finite(sample.feedbackFromKbMs) ? motion.delayMs - sample.feedbackFromKbMs : null;
+    observations.push("Modern 本人近战时序（服务端本地）：\n  伤害事件 MONITOR → 击退 LOWEST：" + number(sample.damageMonitorToKbMs, 3) + " ms（不是扣血或渲染时刻）\n  受伤反馈包 → 首个成功写出的本人速度包（提交时刻之差）：" + (finite(gap) ? number(gap, 3) + " ms" : "未取得完整包对") + "\n  正值表示先提交反馈。按受击者、伤害来源和窗口关联；无客户端 ACK，不能推出屏幕变红的时刻。");
+  }
+  if (finite(sample.velocity?.listenerMs)) observations.push("最近一次速度事件：击退 LOWEST → 速度 LOWEST " + number(sample.velocity.entryDelayMs, 3) + " ms；速度 LOWEST → MONITOR " + number(sample.velocity.listenerMs, 3) + " ms（包含此段内所有监听器）。");
   if (sample.velocity) observations.push("后续速度候选（受击者最近三 tick 内的最新事件，非包 / ACK）：\n" + "  关联方式：" + (sample.velocity.correlation === "same-victim-time-window" ? "同一受击者 / 最近三 tick 时间窗口" : display(sample.velocity.correlation)) + "\n  候选速度事件次数：" + integer(sample.velocity.count) + "\n  首次观察间隔：" + number(sample.velocity.firstDelayMs, 2) + " ms\n  最新观察间隔（KB LOWEST → 速度 MONITOR）：" + number(sample.velocity.delayMs, 2) + " ms\n  最终取消：" + flag(sample.velocity.cancelled) + "\n  最新候选事件内部向量变化：" + (different(sample.velocity.before, sample.velocity.after) ? "有" : "未观察到"));
   else observations.push("后续速度事件：未观察到可关联事件。不能据此判断发包丢失或未发送。");
   if (sample.movement) { const m = sample.movement, reasons = { teleport: "玩家传送", respawn: "玩家重生", quit: "玩家离线" }; observations.push("后续位移：\n  观察 tick：" + display(m.ticks) + "\n  ΔX / ΔY / ΔZ：" + [m.dx, m.dy, m.dz].map(n => number(n, 5)).join(" / ") + "\n  末次速度：" + (vector(m.velocity) ? m.velocity.map(n => number(n, 5)).join(" / ") : "—") + "\n  观察中断：" + flag(m.interrupted) + (m.reason ? "\n  中断原因：" + (Object.hasOwn(reasons, m.reason) ? reasons[m.reason] : display(m.reason)) : "") + (m.interrupted ? "\n  中断记录不参与完整位移统计。后续受击、传送、重生或离线等情况可能中断观察。" : "")); }
   else observations.push("后续位移：无关联观察。下一次受击、离线、会话结束等情况均可能影响观察。");
+  if (data.schema >= 2) {
+    const packets = sample.motionPackets;
+    if (Array.isArray(packets)) {
+      const lines = packets.map(p => `  +${number(p.delayMs, 3)} ms  XYZ ${p.vector.map(n => number(n, 5)).join(" / ")}  ${p.bundled ? "组合包 · " : ""}${({written:"本地写出成功",failed:"本地写出失败",pending:"停止时未确认"})[p.status]}${finite(p.completedMs) ? ` (+${number(p.completedMs, 3)} ms)` : ""}`);
+      observations.push("本人实体速度包（服务端编码前；按受击者和时间关联，不是客户端 ACK）：\n" + (lines.join("\n") || "  窗口内未观察到，不能据此判为丢包。") + (sample.omittedMotionPackets ? `\n  另有 ${sample.omittedMotionPackets} 条超出明细上限。` : ""));
+    }
+    if (Array.isArray(sample.trajectory)) {
+      const rows = Array.from({length:6}, (_, i) => { const p = sample.trajectory.find(p => p.tick === i + 1); return `  T${i+1}   ` + (p ? [p.dx,p.dy,p.dz,Math.hypot(p.dx,p.dz)].map(n => number(n, 5)).join("  /  ") : "— 未采到"); });
+      observations.push("逐 tick 累计位移（格）：ΔX / ΔY / ΔZ / 水平距离\n" + rows.join("\n") + "\n  观察状态：" + (traceReasons[sample.traceStatus] || "未知") + (traceOutcome(sample) ? " · " + traceOutcome(sample) : ""));
+    }
+  }
   $("detail-observations").textContent = observations.join("\n\n");
   const dialog = $("sample-dialog"); if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
 }
@@ -252,6 +283,7 @@ function createCharts() {
   new Chart("ping-chart", c => { const role = $("ping-role").value, rows = filtered.filter(s => !s.cancelled && finite(s[role]) && s[role] >= 0 && finite(horizontal(s.final))); if (!rows.length) { c.empty("当前筛选没有已知 Ping 的有效事件"); return; } c.axes(0, Math.max(10, ...rows.map(s => s[role])) * 1.08, 0, Math.max(.001, ...rows.map(s => horizontal(s.final))) * 1.1, "Ping / ms", "最终 H", integer); rows.forEach(s => c.point(s[role], horizontal(s.final), sampleLabel(s) + "\n" + (role === "victimPing" ? "受击者" : "攻击者") + " Ping " + ping(s[role]) + " ms\n最终 H " + number(horizontal(s.final), 5), s, css(classic(s) ? "--accent" : "--blue"))); });
   new Chart("ping-group-chart", c => { const role = $("ping-role").value, groups = [ ["0–49", 0, 50], ["50–99", 50, 100], ["100–149", 100, 150], ["150–249", 150, 250], ["≥250", 250, Infinity], ["未知", -Infinity, 0] ].map(([label, low, high]) => { const rows = filtered.filter(s => !s.cancelled && finite(horizontal(s.final)) && (low === -Infinity ? !finite(s[role]) || s[role] < 0 : finite(s[role]) && s[role] >= low && s[role] < high)); return { label, rows, h: mean(values(rows, s => horizontal(s.final))) }; }); if (!groups.some(g => g.rows.length)) { c.empty("没有可分组的有效事件"); return; } c.axes(0, 6, 0, Math.max(.001, ...groups.map(g => g.h || 0)) * 1.2, "Ping 分组 / ms", "最终 H 均值", () => ""); const width = (c.plot.right - c.plot.left) / 6; groups.forEach((g, i) => { const x = c.x(i) + width * .15, w = width * .7, y = c.y(g.h || 0), bottom = c.y(0); c.ctx.fillStyle = css(i === 5 ? "--muted" : "--blue"); c.ctx.globalAlpha = .8; c.ctx.fillRect(x, y, w, bottom - y); c.ctx.globalAlpha = 1; c.ctx.fillStyle = css("--muted"); c.ctx.textAlign = "center"; c.ctx.fillText(g.label, x + w / 2, bottom + 18); c.points.push({ rect: [x, Math.min(y, bottom - 8), x + w, bottom], text: "Ping " + g.label + (i < 5 ? " ms" : "") + "\n样本 " + integer(g.rows.length) + "\n最终 H 均值 " + number(g.h, 5) + "\n最终 Y 均值 " + number(mean(values(g.rows, s => vertical(s.final))), 5) + "\n插件处理 P95 " + number(quantile(values(g.rows, s => s.processingMicros), .95), 1) + " μs" }); }); });
   new Chart("processing-chart", c => histogram(c, filtered.map(s => ({ value: s.processingMicros, sample: s })), "μs", css("--orange")));
+  new Chart("motion-chart", c => histogram(c, filtered.map(s => ({ value: s.motionPackets?.find(p => p.status === "written")?.delayMs, sample: s })).filter(p => finite(p.value)), "ms", css("--blue")));
   new Chart("velocity-chart", c => histogram(c, filtered.filter(s => s.velocity).map(s => ({ value: s.velocity.delayMs, sample: s })), "ms", css("--purple")));
 }
 function correlation(rows, xFn, yFn) { const pairs = rows.map(s => [xFn(s), yFn(s)]).filter(([x, y]) => finite(x) && x >= 0 && finite(y)); if (pairs.length < 3) return null; const xMean = mean(pairs.map(p => p[0])), yMean = mean(pairs.map(p => p[1])); let xx = 0, yy = 0, xy = 0; pairs.forEach(([x, y]) => { xx += (x - xMean) ** 2; yy += (y - yMean) ** 2; xy += (x - xMean) * (y - yMean); }); return xx && yy ? xy / Math.sqrt(xx * yy) : null; }

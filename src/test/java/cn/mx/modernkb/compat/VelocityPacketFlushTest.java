@@ -11,7 +11,7 @@ import static org.mockito.Mockito.*;
 
 /** Uses unflushed writes to distinguish timely transport from the usual tick-end batch. */
 public class VelocityPacketFlushTest {
-    public record Motion(int id, double x, double y, double z) { public int getId() { return id; } }
+    public record Motion(int id, double x, double y, double z) { public int getId() { return id; } public Motion getMovement() { return this; } }
     public record Bundle(List<Object> subPackets) {}
     public record Explosion() {}
     private static final Motion SELF = new Motion(42, .5274, .361375, -.3);
@@ -26,6 +26,8 @@ public class VelocityPacketFlushTest {
             var classifier = new VelocityPacketClassifier(Motion.class, Bundle.class, Explosion.class);
             when(codec.requiresVelocityFlush(any(), anyInt())).thenAnswer(call ->
                     classifier.requiresFlush(call.getArgument(0), call.getArgument(1)));
+            doAnswer(call -> { classifier.visitMotion(call.getArgument(0), call.getArgument(1), false, call.getArgument(2)); return null; })
+                    .when(codec).visitMotion(any(), anyInt(), any());
             when(codec.transform(any(), any(), anyBoolean(), anyInt(), anyBoolean()))
                     .thenAnswer(call -> List.of(call.getArgument(0, Object.class)));
             var state = new CollisionTeams<Object>("Alice", "mkb_test", new Object(), value -> value);
@@ -78,6 +80,23 @@ public class VelocityPacketFlushTest {
         }
     }
 
+    @Test public void observerRecordsOnlyOwnMotionInsideBundleAndReportsLocalWriteOutcome() throws Exception {
+        try (var f = new Fixture(false, true)) {
+            var results = new java.util.ArrayList<Boolean>(); var bundled = new java.util.ArrayList<Boolean>();
+            var id = java.util.UUID.randomUUID();
+            f.overlay.observe(id, recipient -> { assertEquals(id, recipient); return (time,x,y,z,b) -> {
+                assertEquals(SELF.x,x,0); assertEquals(SELF.y,y,0); assertEquals(SELF.z,z,0); bundled.add(b); return results::add;
+            }; });
+            var other = new Motion(43, 1, 2, 3);
+            var batch = new Bundle(List.of(other,new Bundle(List.of(SELF))));
+            f.channel.write(batch); assertSame(batch,f.channel.readOutbound());
+            f.channel.pipeline().addFirst(new ChannelOutboundHandlerAdapter() {
+                @Override public void write(ChannelHandlerContext c,Object msg,ChannelPromise p) { p.setFailure(new IllegalStateException()); }
+            });
+            f.channel.write(SELF);
+            assertEquals(List.of(true,false),bundled); assertEquals(List.of(true,false),results);
+        }
+    }
     @Test public void disabledOrExcludedPlayersResumeCoreBatching() throws Exception {
         try (var f = new Fixture(false, false)) {
             var waiting = f.channel.write(SELF);

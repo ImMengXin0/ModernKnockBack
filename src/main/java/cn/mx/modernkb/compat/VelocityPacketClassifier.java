@@ -24,6 +24,27 @@ final class VelocityPacketClassifier {
         children = bundle.getMethod("subPackets");
     }
 
+    @FunctionalInterface interface Visitor { void accept(double x, double y, double z, boolean bundled); }
+    private Method movement, x, y, z;
+
+    // Resolve optional diagnostics only when profiling. The flush path has no dependency on these accessors.
+    private synchronized void resolveMotion() throws ReflectiveOperationException {
+        if (movement != null) return;
+        Method getter = motion.getMethod("getMovement");
+        Class<?> vec = getter.getReturnType();
+        x = vec.getMethod("x"); y = vec.getMethod("y"); z = vec.getMethod("z"); movement = getter;
+    }
+    void visitMotion(Object packet, int self, boolean bundled, Visitor visitor) throws ReflectiveOperationException {
+        if (self < 0) return;
+        if (motion.isInstance(packet) && (int) entityId.invoke(packet) == self) {
+            resolveMotion();
+            Object vec = movement.invoke(packet);
+            visitor.accept((double) x.invoke(vec), (double) y.invoke(vec), (double) z.invoke(vec), bundled);
+        } else if (bundle.isInstance(packet)) {
+            for (Object child : (Iterable<?>) children.invoke(packet)) visitMotion(child, self, true, visitor);
+        }
+    }
+
     boolean requiresFlush(Object value, int selfEntityId) throws ReflectiveOperationException {
         if (selfEntityId < 0) return false;
         if (motion.isInstance(value)) return (int) entityId.invoke(value) == selfEntityId;

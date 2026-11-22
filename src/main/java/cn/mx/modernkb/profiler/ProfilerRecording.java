@@ -21,6 +21,8 @@ public final class ProfilerRecording {
         private final long timeMs;
         private final Map<String, Object> fields;
         private boolean finished;
+        private List<Map<String,Object>> trajectory, packets;
+        private int skippedPackets;
 
         private Ticket(ProfilerRecording owner, int id, long timeMs, Map<String, Object> fields) {
             this.owner = owner;
@@ -150,6 +152,43 @@ public final class ProfilerRecording {
         if (accepts(ticket)) ticket.fields.putAll(fields(fields));
     }
 
+    synchronized void startTrace(Ticket t, boolean player) {
+        if (!accepts(t)) return;
+        t.trajectory = new ArrayList<>(6);
+        t.fields.put("trajectory", t.trajectory);
+        t.fields.put("traceStatus", "observing");
+        if (player) { t.packets = new ArrayList<>(); t.fields.put("motionPackets", t.packets); }
+    }
+
+    synchronized void point(Ticket t, int age, double dx, double dy, double dz) {
+        if (!accepts(t) || t.trajectory == null || age < 1 || age > 6 || !"observing".equals(t.fields.get("traceStatus"))) return;
+        var points = t.trajectory;
+        if (!points.isEmpty() && (int) points.getLast().get("tick") >= age) return;
+        points.add(Map.of("tick", age, "dx", dx, "dy", dy, "dz", dz));
+    }
+
+    synchronized void endTrace(Ticket t, String reason, int age) {
+        if (!accepts(t) || t.trajectory == null || !"observing".equals(t.fields.get("traceStatus"))) return;
+        if (reason.equals("complete") && t.trajectory.size() != 6) reason = "sampling-gap";
+        t.fields.put("traceStatus", reason);
+        if (t.fields.get("movement") == null)
+            t.fields.put("movement", Map.of("interrupted", true, "ticks", age, "reason", reason));
+    }
+
+    synchronized java.util.function.Consumer<Boolean> submitPacket(Ticket t, long start, long now,
+            double x, double y, double z, boolean bundled) {
+        if (!accepts(t) || t.packets == null || !"observing".equals(t.fields.get("traceStatus"))) return null;
+        if (t.packets.size() >= 8) { t.fields.put("omittedMotionPackets", ++t.skippedPackets); return null; }
+        Map<String,Object> packet = new LinkedHashMap<>();
+        packet.put("delayMs", (now - start) / 1_000_000.0); packet.put("vector", List.of(x, y, z));
+        packet.put("bundled", bundled); packet.put("status", "pending"); t.packets.add(packet);
+        return ok -> { synchronized (this) {
+            if (!accepts(t)) return;
+            packet.put("status", ok ? "written" : "failed");
+            packet.put("completedMs", (System.nanoTime() - start) / 1_000_000.0);
+        } };
+    }
+
     /** End collection immediately; serialization can then be performed by an independent writer thread. */
     public synchronized void seal() {
         if (sealed) return;
@@ -196,10 +235,13 @@ public final class ProfilerRecording {
     private Map<String, Object> report(Detached data, String reason, Map<String, Object> endEnvironment,
                                       Map<String, Object> counters) {
         List<Map<String, Object>> complete = new ArrayList<>(data.completedCount());
-        for (Ticket sample : data.samples()) if (sample.finished) complete.add(sample.fields);
+        for (Ticket sample : data.samples()) if (sample.finished) {
+            sample.fields.replace("traceStatus", "observing", "session-ended");
+            complete.add(sample.fields);
+        }
         int pending = data.samples().size() - data.completedCount();
         Map<String, Object> report = new LinkedHashMap<>();
-        report.put("schema", 1);
+        report.put("schema", 2);
         report.put("id", id);
         report.put("startedAt", startedAt);
         report.put("stoppedAt", data.stoppedAt());

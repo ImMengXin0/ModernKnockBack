@@ -1,4 +1,4 @@
-# ModernKnockBack 3.0.0
+# ModernKnockBack 3.1.0
 
 Minecraft 1.21.11 / Java 21+。本页只说明 Classic、Modern 配置参数和管理命令。
 
@@ -17,7 +17,7 @@ Minecraft 1.21.11 / Java 21+。本页只说明 Classic、Modern 配置参数和�
 | `/kbtest classic` | 切换到 Classic 模式。模式会保存并在服务器重启后继续使用。 |
 | `/kbtest modern` | 切换到 Modern 模式。模式会保存并在服务器重启后继续使用。 |
 | `/kbtest reload` | 重载当前模式的配置。 |
-| `/kbtest profiler open` | 开始记录当前模式的 KB、速度事件、短时位移和 Ping，并保存完整有效参数与插件环境快照。Classic 的 Modern 物品例外单独标识；切换模式、reload 和 GUI 改参会追加参数快照。 |
+| `/kbtest profiler open` | 开始记录当前模式的 KB、速度事件、本人速度包、Modern 玩家直接近战的受伤反馈与速度包提交间隔、受击后 1～6 tick 的逐 tick 位移和 Ping，并保存完整有效参数与插件环境快照。Classic 的 Modern 物品例外单独标识；切换模式、reload 和 GUI 改参会追加参数快照。 |
 | `/kbtest profiler stop` | 停止并在后台生成 `profiler/kb-<会话ID>.html`，返回服务器本机文件链接。报告自带统计图、分析图、筛选和完整参数，下载到本机即可离线查看。 |
 | `/kbtest profiler status` | 查看采集状态和已记录事件数量。 |
 | `/kbtest profiler report` | 再次显示本次插件运行期间最近生成的报告位置和可复制文件链接。 |
@@ -39,7 +39,7 @@ Minecraft 1.21.11 / Java 21+。本页只说明 Classic、Modern 配置参数和�
 
 选 profile 的优先级：精确 `matchups` → 玩家手动分配的非 `default` profile（`respect-player-profile: true` 时）→ 类型路由 → `default`。`profiles.yml` 中未写出的字段继承 `defaults`。profile 自己的 `enabled: false` 只关闭该 profile；`config.yml` 的 `enabled: false` 关闭整套模式配置。
 
-Profiler 无需新增配置项，最多记录 15 分钟或 10000 条 KB 事件，达到限制会自动停止并导出；插件正常卸载也会保存进行中的检测。未开启时只检查采集状态。报告包含原始事件向量、计算结果、本插件写入值、MONITOR 阶段观察值、相关速度事件与受击后三 tick 的位移；新受击打断或切换世界的位移会标记，不混入轨迹分析。Classic 的参数是目标速度，Paper KB 事件记录的是增量，`PlayerVelocityEvent` 是速度，不能直接当作同一量比较。速度事件仅按同一受击者最近三 tick 关联，属于观察候选，不证明该速度一定来自这次受击。
+Profiler 无需新增配置项，最多记录 15 分钟或 10000 条 KB 事件，达到限制会自动停止并导出；插件正常卸载也会保存进行中的检测。未开启时只检查采集状态。报告中分开显示击退增量、Bukkit 速度事件、受击者连接上的实体速度包（含组合包）和逐 tick 累计位移。包明细最多保留每条事件前 8 个候选，区分本地写出成功、失败、尚未确认；本机编码前的观察不能证明客户端收包或丢包。逐 tick 位移以实际实体 tick 为准，传送、重生、新受击或停止检测会保留已有点、标出中断或缺失。报告按完整六点轨迹统计“前两 tick 未动、之后移动”和“六 tick 均未动”，可按事件编号查看详情。速度事件只在前三 tick 内关联；速度包按同一玩家最近一次未取消击退的轨迹窗口关联，一刀可能有多个击退分量，也可能观察到无关的同玩家速度包。
 
 报告的 Ping 是服务器提供的往返延迟估计，事件处理耗时和 KB 到速度事件的时间仅代表服务端阶段；无法据此测量客户端收包时间或真实丢包率。插件列表、监听顺序和向量改写只帮助排查相关性，不自动认定某个插件造成了改写。HTML 不上传数据、不依赖外部网站；文件链接指向服务器磁盘，远程管理员应下载 HTML 后打开。报告会包含参测玩家名称与 UUID，应按管理数据保管。
 
@@ -52,7 +52,7 @@ Profiler 无需新增配置项，最多记录 15 分钟或 10000 条 KB 事件�
 | `affect-other-living-entities` | 是否修改普通生物 KB。`false` 时玩家和已识别 Bot 仍可处理。 |
 | `respect-player-profile` | 是否优先采用玩家手动分配的非 `default` profile。精确 `matchups` 仍优先。 |
 | `bot-metadata` | Bukkit metadata 名称列表。实体匹配任一名称时识别为 Bot；API 的 Bot 标记可覆盖此判断。 |
-| `compatibility.knockbacksync` | `preserve-y` 或 `before-sync`。Modern 默认 `preserve-y`：真实玩家近战的 Y 分量留给 KnockbackSync；`before-sync` 允许先写入完整向量，但后续同步仍可能改写 Y。Classic 默认 `before-sync`，并由 `combat.yml` 的速度保护控制最终速度事件。 |
+| `compatibility.knockbacksync` | `preserve-y` 或 `before-sync`。Modern 默认 `preserve-y`：真实玩家近战的 Y 分量留给 KnockbackSync；`before-sync` 允许先写入完整向量，但后续同步仍可能改写 Y。KBS Bukkit `1.3.6-dev-b142` 全局同步关闭时，Modern 按未启用同步处理；开启时会在插件启动阶段预热 KBS 的方块状态映射。Classic 默认 `before-sync`，并由 `combat.yml` 的速度保护控制最终速度事件。 |
 | `profiles` | 击打类型到 `profiles.yml` profile 名称的映射。默认包括 `melee`、`bot-melee`、`arrow`、`crossbow`、`trident`、`mace`、`spear`、`sweep`、`shield-block`、`fishing-rod`、`wind-charge`、`explosion`、`crystal`、`tnt`、`regularity`、`grim-reaper`、`other-projectile`、`damage`、`unknown`。 |
 | `matchups` | 可选的精确覆盖，格式为 `<击打类型>.<攻击者类别>.<受击者类别>: <profile>`。类别是 `player`、`bot`、`other`、`unknown`；例如 `arrow.player.bot: arrow_to_bot`。目标 profile 必须已定义。 |
 

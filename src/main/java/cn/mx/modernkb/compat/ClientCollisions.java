@@ -23,8 +23,13 @@ public final class ClientCollisions implements Listener, AutoCloseable {
     private final TeamPacketCodec codec;
     private final Map<UUID, Overlay> connections = new ConcurrentHashMap<>();
     private volatile boolean closed;
+    private final MotionWriteProbe probe;
 
     public ClientCollisions(Plugin plugin, Supplier<Settings> settings, PlayerStore players) throws ReflectiveOperationException {
+        this(plugin, settings, players, null);
+    }
+    public ClientCollisions(Plugin plugin, Supplier<Settings> settings, PlayerStore players, MotionWriteProbe probe) throws ReflectiveOperationException {
+        this.probe = probe;
         this.plugin = plugin; this.settings = settings; this.players = players; codec = new TeamPacketCodec();
     }
     record View(boolean classic, boolean legacyHitEffects, boolean timelyVelocity) {
@@ -47,6 +52,7 @@ public final class ClientCollisions implements Listener, AutoCloseable {
             for (Object message : codec.snapshot(player)) state.accept(codec.decode(message));
             var overlay = new Overlay(channel, state, codec,
                     message -> plugin.getLogger().warning(message), player.getEntityId(), () -> view(id));
+            overlay.observe(id, probe);
             if (connections.putIfAbsent(id, overlay) != null) return;
             channel.eventLoop().execute(() -> {
                 if (closed || connections.get(id) != overlay || !channel.isActive()) { connections.remove(id, overlay); return; }
@@ -95,6 +101,42 @@ public final class ClientCollisions implements Listener, AutoCloseable {
             this.channel = channel; this.state = state; this.codec = codec; this.view = view; this.warning = warning;
             this.selfEntityId = selfEntityId;
         }
+        private UUID recipient;
+        private MotionWriteProbe probe;
+        void observe(UUID id, MotionWriteProbe probe) { this.recipient = id; this.probe = probe; }
+        private ChannelPromise observeWrite(Object message, ChannelPromise original) {
+            if (probe == null) return original;
+            try {
+                var capture = probe.motionTarget(recipient);
+                if (capture == null) return original;
+                long submitted = System.nanoTime();
+                var callbacks = new ArrayList<Consumer<Boolean>>();
+                codec.visitMotion(message, selfEntityId, (x, y, z, bundled) -> {
+                    var done = capture.submitted(submitted, x, y, z, bundled);
+                    if (done != null) callbacks.add(done);
+                });
+                if (!callbacks.isEmpty()) {
+                    ChannelPromise tracked = original.unvoid();
+                    tracked.addListener(f -> callbacks.forEach(c -> c.accept(f.isSuccess())));
+                    return tracked;
+                }
+            } catch (ReflectiveOperationException | RuntimeException unavailable) {
+                probe = null;
+                warning.accept("Profiler motion observer disabled on this connection: " + unavailable);
+            }
+            return original;
+        }
+        private boolean feedbackUnavailable;
+        private void observeFeedback(Object packet) {
+            if (probe == null || feedbackUnavailable) return;
+            try {
+                var capture = probe.feedbackTarget(recipient);
+                if (capture != null) codec.visitFeedback(packet, selfEntityId, capture);
+            } catch (ReflectiveOperationException | RuntimeException unavailable) {
+                feedbackUnavailable = true;
+                warning.accept("Profiler damage feedback unavailable on this connection: " + unavailable);
+            }
+        }
         void selfEntityId(int id) { selfEntityId = id; }
         void update(ChannelHandlerContext context) { update(context, view.get().classic()); }
         private void update(ChannelHandlerContext context, boolean enabled) {
@@ -133,8 +175,14 @@ public final class ClientCollisions implements Listener, AutoCloseable {
             }
             boolean flush = false;
             for (int index = 0; index < output.size(); index++) {
-                if (current.timelyVelocity() && codec.requiresVelocityFlush(output.get(index), selfEntityId)) flush = true;
-                context.write(output.get(index), index == output.size() - 1 ? promise : context.voidPromise());
+                Object packet = output.get(index);
+                ChannelPromise next = index == output.size() - 1 ? promise : context.voidPromise();
+                if (current.timelyVelocity() && codec.requiresVelocityFlush(packet, selfEntityId)) {
+                    flush = true;
+                    next = observeWrite(packet, next);
+                }
+                if (current.timelyVelocity()) observeFeedback(packet);
+                context.write(packet, next);
             }
             // Flush only after the complete transformed packet/bundle is written. TCP keeps
             // ordering and retries; replaying an old velocity would create a second impulse.

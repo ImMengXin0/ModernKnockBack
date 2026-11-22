@@ -52,6 +52,14 @@ final class TeamPacketCodec {
     boolean requiresVelocityFlush(Object message, int selfEntityId) throws ReflectiveOperationException {
         return velocityPackets.requiresFlush(message, selfEntityId);
     }
+    void visitMotion(Object message, int self, VelocityPacketClassifier.Visitor visitor) throws ReflectiveOperationException {
+        velocityPackets.visitMotion(message, self, false, visitor);
+    }
+    // Optional: packet observation must never prevent normal delivery on another mapping.
+    private final DamagePacketFeedback damageFeedback = DamagePacketFeedback.forServer(bundle, children);
+    void visitFeedback(Object packet, int self, MotionWriteProbe.Feedback capture) throws ReflectiveOperationException {
+        if (damageFeedback != null) damageFeedback.visit(packet, self, capture);
+    }
     List<Object> snapshot(Player player) throws ReflectiveOperationException {
         var result = new ArrayList<Object>();
         for (Object value : (Collection<?>) teams.invoke(boardHandle.invoke(player.getScoreboard())))

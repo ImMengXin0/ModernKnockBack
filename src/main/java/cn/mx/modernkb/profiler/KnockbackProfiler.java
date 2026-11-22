@@ -4,9 +4,11 @@ import cn.mx.modernkb.Messages;
 import cn.mx.modernkb.api.*;
 import cn.mx.modernkb.combat.CombatTracker;
 import cn.mx.modernkb.compat.SyncCompatibility;
+import cn.mx.modernkb.compat.MotionWriteProbe;
 import cn.mx.modernkb.config.*;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.event.entity.EntityPushedByEntityAttackEvent;
+import java.lang.ref.WeakReference;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
@@ -24,6 +26,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.*;
 import org.bukkit.event.*;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.PlayerVelocityEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
@@ -32,10 +35,11 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.util.Vector;
 
 /** Read-only observations on the entity region; only immutable data reaches the exporter. */
-public final class KnockbackProfiler implements Listener, AutoCloseable {
+public final class KnockbackProfiler implements Listener, MotionWriteProbe, AutoCloseable {
     public static final int MAX_SAMPLES = 10_000;
     public static final long MAX_SECONDS = 15 * 60;
-    private static final int MOVEMENT_TICKS = 3;
+    private static final int VELOCITY_EVENT_TICKS = 3;
+    private static final int TRACE_TICKS = 6;
     private final Plugin plugin;
     private final Supplier<Settings> settings;
     private final PlayerStore players;
@@ -54,16 +58,74 @@ public final class KnockbackProfiler implements Listener, AutoCloseable {
         final Map<String, Object> baseline;
         final ConcurrentMap<EntityKnockbackEvent, Pending> knockbacks = new ConcurrentHashMap<>();
         final ConcurrentMap<PlayerVelocityEvent, Velocity> velocities = new ConcurrentHashMap<>();
+        final ConcurrentMap<UUID, Damage> damages = new ConcurrentHashMap<>();
         final ConcurrentMap<UUID, Pending> latest = new ConcurrentHashMap<>();
         Active(ProfilerRecording recording, CommandSender initiator, Map<String, Object> baseline) {
             this.recording = recording; this.initiator = initiator; this.baseline = baseline;
         }
-        void clear() { knockbacks.clear(); velocities.clear(); latest.clear(); }
+        void clear() { knockbacks.clear(); velocities.clear(); latest.clear(); damages.clear(); }
     }
     private record Pending(ProfilerRecording.Ticket ticket, long nanoTime, int tick, UUID world,
-                           double x, double y, double z, AtomicInteger velocityCount, AtomicLong firstVelocityNanos,
-                           AtomicReference<String> interruptionReason) {}
-    private record Velocity(Pending hit, Vector original) {}
+                           double x, double y, double z, AtomicInteger velocityCount, AtomicLong firstVelocityNanos) {}
+    private record Velocity(Pending hit, Vector original, long entered) {}
+
+    // Netty can submit feedback on either side of the region thread's KB callback. Retain
+    // at most one candidate per online victim. Never read the Bukkit event on Netty.
+    private static final class Damage implements MotionWriteProbe.Feedback {
+        final WeakReference<EntityDamageEvent> event;
+        final int source, tick;
+        final long monitor;
+        final ProfilerRecording recording;
+        volatile boolean observed;
+        long feedback;
+        Pending base, extra;
+        boolean ambiguous;
+        Damage(ProfilerRecording recording, EntityDamageEvent event, int source, int tick, long monitor) {
+            this.recording = recording; this.event = new WeakReference<>(event); this.source = source; this.tick = tick; this.monitor = monitor;
+        }
+        @Override public synchronized void submitted(int attacker, long now) {
+            if (observed || attacker != source) return;
+            feedback = now; observed = true; publish();
+        }
+        synchronized void bind(Pending value) {
+            // Modern melee can produce base and extra KB events for the same damage event.
+            if (base == null) base = value;
+            else if (extra == null) extra = value;
+            else return;
+            recording.calculated(value.ticket, Map.of("damageMonitorToKbMs", (value.nanoTime - monitor) / 1_000_000.0));
+            if (observed) publish(value);
+        }
+        private void publish() {
+            publish(base); publish(extra);
+        }
+        private void publish(Pending hit) {
+            if (hit != null && !ambiguous) recording.calculated(hit.ticket, Map.of("feedbackFromKbMs", (feedback - hit.nanoTime) / 1_000_000.0));
+        }
+    }
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void damageFeedback(EntityDamageEvent event) {
+        Active session = active.get();
+        if (session == null) return;
+        observe(() -> {
+            long now = System.nanoTime();
+            if (!(event.getEntity() instanceof Player victim) || !CombatTracker.owns(victim)) return;
+            UUID id = victim.getUniqueId();
+            if (!event.isCancelled() && event.getCause() == EntityDamageEvent.DamageCause.ENTITY_ATTACK
+                    && event instanceof EntityDamageByEntityEvent melee && melee.getDamager() instanceof Player source
+                    && CombatTracker.owns(source) && settings.get().mode() == CombatMode.MODERN && !players.get(id).excluded()) {
+                Damage next = new Damage(session.recording, event, source.getEntityId(), victim.getTicksLived(), now);
+                Damage last = session.damages.get(id);
+                next.ambiguous = last != null && last.source == next.source && !last.observed
+                        && next.tick >= last.tick && next.tick - last.tick <= VELOCITY_EVENT_TICKS;
+                session.damages.put(id, next);
+            } else session.damages.remove(id);
+        });
+    }
+    @Override public MotionWriteProbe.Feedback feedbackTarget(UUID id) {
+        Active session = active.get();
+        Damage damage = session == null ? null : session.damages.get(id);
+        return damage == null || damage.observed ? null : damage;
+    }
 
     public KnockbackProfiler(Plugin plugin, Supplier<Settings> settings, PlayerStore players,
                              CombatTracker tracker, Supplier<Map<String, Object>> counters,
@@ -156,7 +218,7 @@ public final class KnockbackProfiler implements Listener, AutoCloseable {
         if (ticket == null) return;
         Location location = victim.getLocation();
         session.knockbacks.put(event, new Pending(ticket, started, victim.getTicksLived(), location.getWorld().getUID(),
-                location.getX(), location.getY(), location.getZ(), new AtomicInteger(), new AtomicLong(), new AtomicReference<>()));
+                location.getX(), location.getY(), location.getZ(), new AtomicInteger(), new AtomicLong()));
     }
 
     /** The calculation path supplies immutable attribution; it never causes extra combat events. */
@@ -215,26 +277,55 @@ public final class KnockbackProfiler implements Listener, AutoCloseable {
                     "processingMicros", (System.nanoTime() - hit.nanoTime) / 1_000.0));
             if (event.isCancelled() || !(event.getEntity() instanceof LivingEntity victim) || !CombatTracker.owns(victim)) return;
             UUID id = victim.getUniqueId();
+            Damage damage = session.damages.get(id);
+            EntityDamageEvent cause = damage == null ? null : damage.event.get();
+            if (cause != null && !cause.isCancelled() && damage.tick == hit.tick && event.getCause() == EntityKnockbackEvent.Cause.ENTITY_ATTACK
+                    && event instanceof EntityPushedByEntityAttackEvent attack && attack.getPushedBy() instanceof Player source
+                    && CombatTracker.owns(source) && source.getEntityId() == damage.source
+                    && cause == victim.getLastDamageCause()) damage.bind(hit);
+            session.recording.startTrace(hit.ticket, victim instanceof Player);
             Pending previous = session.latest.put(id, hit);
-            if (previous != null) previous.interruptionReason.compareAndSet(null, "new-hit");
-            // Observe one short trajectory, without replaying velocity or reading entities asynchronously.
-            victim.getScheduler().runDelayed(plugin, task -> movement(session, hit, victim),
-                    () -> session.latest.remove(id, hit), MOVEMENT_TICKS);
+            if (previous != null) session.recording.endTrace(previous.ticket, "new-hit", hit.tick - previous.tick);
+            schedulePoint(session, hit, victim, id, 0, 0);
         });
     }
-    private void movement(Active session, Pending hit, LivingEntity victim) {
-        if (active.get() != session || !CombatTracker.owns(victim)) return;
-        try { observe(() -> {
-            boolean interrupted = session.latest.get(victim.getUniqueId()) != hit;
+
+    // Netty thread: capture the specific ticket at write time, never look up the player on completion.
+    @Override public MotionWriteProbe.Capture motionTarget(UUID recipient) {
+        Active session = active.get();
+        Pending hit = session == null ? null : session.latest.get(recipient);
+        if (hit == null) return null;
+        return (now, x, y, z, bundled) -> session.recording.submitPacket(hit.ticket, hit.nanoTime, now, x, y, z, bundled);
+    }
+
+    private void schedulePoint(Active session, Pending hit, LivingEntity victim, UUID id, int lastAge, int attempts) {
+        Runnable retired = () -> {
+            if (session.latest.remove(id, hit)) session.recording.endTrace(hit.ticket, "retired", lastAge);
+        };
+        var scheduled = victim.getScheduler().runDelayed(plugin, task -> observe(() -> {
+            if (active.get() != session || session.latest.get(id) != hit) return;
+            if (!CombatTracker.owns(victim)) { retired.run(); return; }
+            int age = victim.getTicksLived() - hit.tick;
             Location now = victim.getLocation();
-            interrupted |= !now.getWorld().getUID().equals(hit.world) || victim.isDead();
-            Map<String, Object> fields = new LinkedHashMap<>();
-            fields.put("ticks", victim.getTicksLived() - hit.tick); fields.put("interrupted", interrupted);
-            if (hit.interruptionReason.get() != null) fields.put("reason", hit.interruptionReason.get());
-            fields.put("dx", interrupted ? null : now.getX() - hit.x); fields.put("dy", interrupted ? null : now.getY() - hit.y);
-            fields.put("dz", interrupted ? null : now.getZ() - hit.z); fields.put("velocity", interrupted ? null : vector(victim.getVelocity()));
-            session.recording.movement(hit.ticket, Map.of("movement", fields));
-        }); } finally { session.latest.remove(victim.getUniqueId(), hit); }
+            String end = null;
+            if (victim.isDead()) end = "death";
+            else if (!now.getWorld().getUID().equals(hit.world)) end = "world-change";
+            else if (age < 0 || age > TRACE_TICKS) end = "sampling-gap";
+            else if (age > lastAge) {
+                double dx = now.getX() - hit.x, dy = now.getY() - hit.y, dz = now.getZ() - hit.z;
+                session.recording.point(hit.ticket, age, dx, dy, dz);
+                // Keep the short-window summary for comparison with older reports; always use real entity age.
+                if (lastAge < 2 && age >= 2) session.recording.movement(hit.ticket, Map.of("movement", Map.of(
+                        "ticks", age, "interrupted", false, "dx", dx, "dy", dy, "dz", dz, "velocity", vector(victim.getVelocity()))));
+                if (age == TRACE_TICKS) end = "complete";
+            }
+            // An entity scheduler can first run before the entity age advances. Never invent tick 1 or a missing point.
+            if (end == null && attempts >= TRACE_TICKS + 2) end = "sampling-gap";
+            if (end != null) {
+                if (session.latest.remove(id, hit)) session.recording.endTrace(hit.ticket, end, age);
+            } else schedulePoint(session, hit, victim, id, Math.max(age, lastAge), attempts + 1);
+        }), retired, 1L);
+        if (scheduled == null) retired.run(); // Already retired: no callback will be scheduled.
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -247,13 +338,10 @@ public final class KnockbackProfiler implements Listener, AutoCloseable {
         Active session = active.get();
         if (session == null || !CombatTracker.owns(player)) return;
         observe(() -> {
+            session.damages.remove(player.getUniqueId());
             Pending hit = session.latest.remove(player.getUniqueId());
             if (hit == null) return;
-            hit.interruptionReason.set(reason);
-            Map<String, Object> invalid = new LinkedHashMap<>();
-            invalid.put("ticks", player.getTicksLived() - hit.tick); invalid.put("interrupted", true); invalid.put("reason", reason);
-            invalid.put("dx", null); invalid.put("dy", null); invalid.put("dz", null); invalid.put("velocity", null);
-            session.recording.movement(hit.ticket, Map.of("movement", invalid));
+            session.recording.endTrace(hit.ticket, reason, player.getTicksLived() - hit.tick);
         });
     }
 
@@ -262,12 +350,13 @@ public final class KnockbackProfiler implements Listener, AutoCloseable {
         Active session = active.get();
         if (session == null) return;
         observe(() -> {
+            long entered = System.nanoTime();
             Player victim = event.getPlayer();
             if (!CombatTracker.owns(victim)) return;
             Pending hit = session.latest.get(victim.getUniqueId());
             int age = hit == null ? -1 : victim.getTicksLived() - hit.tick;
-            if (hit != null && age >= 0 && age <= MOVEMENT_TICKS)
-                session.velocities.put(event, new Velocity(hit, event.getVelocity().clone()));
+            if (hit != null && age >= 0 && age <= VELOCITY_EVENT_TICKS)
+                session.velocities.put(event, new Velocity(hit, event.getVelocity().clone(), entered));
         });
     }
     @EventHandler(priority = EventPriority.MONITOR)
@@ -283,6 +372,8 @@ public final class KnockbackProfiler implements Listener, AutoCloseable {
             var value = Map.<String, Object>of("before", vector(observation.original), "after", vector(event.getVelocity()),
                     "cancelled", event.isCancelled(), "delayMs", (now - observation.hit.nanoTime) / 1_000_000.0,
                     "firstDelayMs", (observation.hit.firstVelocityNanos.get() - observation.hit.nanoTime) / 1_000_000.0,
+                    "entryDelayMs", (observation.entered - observation.hit.nanoTime) / 1_000_000.0,
+                    "listenerMs", (now - observation.entered) / 1_000_000.0,
                     "count", count, "correlation", "same-victim-time-window");
             // Some cores dispatch twice during one hit. This is the latest observed event, not a packet ACK.
             session.recording.velocity(observation.hit.ticket, Map.of("velocity", value));

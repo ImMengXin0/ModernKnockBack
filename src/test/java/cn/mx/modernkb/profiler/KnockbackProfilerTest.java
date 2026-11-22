@@ -6,6 +6,7 @@ import cn.mx.modernkb.config.*;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import io.papermc.paper.event.entity.EntityPushedByEntityAttackEvent;
 import io.papermc.paper.threadedregions.scheduler.EntityScheduler;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import io.papermc.paper.threadedregions.scheduler.GlobalRegionScheduler;
 import java.nio.file.Path;
 import java.util.*;
@@ -15,6 +16,8 @@ import java.util.logging.Logger;
 import org.bukkit.*;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.PlayerVelocityEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.plugin.Plugin;
@@ -37,6 +40,8 @@ public class KnockbackProfilerTest {
     private ScheduledExecutorService writer;
     private KnockbackProfiler profiler;
     private Settings settings;
+    // Bukkit Location holds a weak reference; a real running server owns the loaded world.
+    private World world;
     private UUID worldId;
     private long processed;
 
@@ -55,9 +60,10 @@ public class KnockbackProfilerTest {
         when(victim.getPing()).thenReturn(87); when(attacker.getPing()).thenReturn(40);
         when(victim.getVelocity()).thenReturn(new Vector(.2, .1, 0)); when(victim.getTicksLived()).thenReturn(100);
         when(victim.isOnGround()).thenReturn(true);
-        World world = mock(World.class); worldId = UUID.randomUUID(); when(world.getUID()).thenReturn(worldId);
+        world = mock(World.class); worldId = UUID.randomUUID(); when(world.getUID()).thenReturn(worldId);
         when(victim.getLocation()).thenReturn(new Location(world, 5, 70, 3));
         scheduler = mock(EntityScheduler.class); when(victim.getScheduler()).thenReturn(scheduler);
+        when(scheduler.runDelayed(eq(plugin), any(), any(), eq(1L))).thenReturn(mock(ScheduledTask.class));
         bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(victim)).thenReturn(true);
         bukkit.when(() -> Bukkit.isOwnedByCurrentRegion(attacker)).thenReturn(true);
         tracker = mock(CombatTracker.class); when(tracker.kind(victim)).thenReturn(CombatantKind.PLAYER);
@@ -148,7 +154,43 @@ public class KnockbackProfilerTest {
         profiler.beginVelocity(velocity); velocity.setVelocity(new Vector(.7, .25, .1)); profiler.finishVelocity(velocity);
         String html = export();
         assertTrue(html.contains("\"before\":[0.4,0.2,0.0]")); assertTrue(html.contains("\"after\":[0.7,0.25,0.1]"));
+        assertTrue(html.contains("\"entryDelayMs\":")); assertTrue(html.contains("\"listenerMs\":"));
         assertTrue(html.contains("\"delayMs\":")); verify(victim, never()).setVelocity(any());
+    }
+    private EntityDamageByEntityEvent directDamage() {
+        EntityDamageByEntityEvent damage = mock(EntityDamageByEntityEvent.class);
+        when(damage.getEntity()).thenReturn(victim); when(damage.getDamager()).thenReturn(attacker);
+        when(damage.getCause()).thenReturn(EntityDamageEvent.DamageCause.ENTITY_ATTACK);
+        when(victim.getLastDamageCause()).thenReturn(damage);
+        return damage;
+    }
+    private void directKb() {
+        var kb = new EntityPushedByEntityAttackEvent(victim, EntityKnockbackEvent.Cause.ENTITY_ATTACK, attacker, new Vector(.4,.3,0));
+        profiler.begin(kb); profiler.finish(kb);
+    }
+    @Test public void feedbackCanPrecedeKbAndRemainLinkedToExtraComponent() throws Exception {
+        var modes = new ModeFiles(temporary.newFolder().toPath()); modes.initialize(); settings = modes.load(CombatMode.MODERN);
+        open(); var damage = directDamage(); profiler.damageFeedback(damage);
+        var capture = profiler.feedbackTarget(victim.getUniqueId()); assertNotNull(capture);
+        capture.submitted(attacker.getEntityId(), System.nanoTime()); directKb(); directKb();
+        String html = export(); assertEquals(2, html.split("\"feedbackFromKbMs\":-", -1).length-1);
+        assertTrue(html.contains("\"damageMonitorToKbMs\":")); verify(victim, never()).setVelocity(any());
+    }
+    @Test public void feedbackAfterKbRequiresSameAttackerAndIgnoresCancelledDamage() throws Exception {
+        var modes = new ModeFiles(temporary.newFolder().toPath()); modes.initialize(); settings = modes.load(CombatMode.MODERN);
+        open(); var cancelled = directDamage(); when(cancelled.isCancelled()).thenReturn(true); profiler.damageFeedback(cancelled);
+        assertNull(profiler.feedbackTarget(victim.getUniqueId()));
+        var damage = directDamage(); profiler.damageFeedback(damage); directKb();
+        var capture = profiler.feedbackTarget(victim.getUniqueId()); capture.submitted(attacker.getEntityId()+1, System.nanoTime());
+        assertSame(capture,profiler.feedbackTarget(victim.getUniqueId()));
+        capture.submitted(attacker.getEntityId(),System.nanoTime()); assertNull(profiler.feedbackTarget(victim.getUniqueId()));
+        String html = export(); assertEquals(1,html.split("\"feedbackFromKbMs\":", -1).length-1);
+    }
+    @Test public void overlappingUnobservedDamageDoesNotGuessFeedbackOwnership() throws Exception {
+        var modes = new ModeFiles(temporary.newFolder().toPath()); modes.initialize(); settings = modes.load(CombatMode.MODERN);
+        open(); profiler.damageFeedback(directDamage()); profiler.damageFeedback(directDamage()); directKb();
+        profiler.feedbackTarget(victim.getUniqueId()).submitted(attacker.getEntityId(),System.nanoTime());
+        String html=export(); assertTrue(html.contains("\"damageMonitorToKbMs\":")); assertFalse(html.contains("\"feedbackFromKbMs\":"));
     }
     @Test public void velocityAfterWindowIsNotAttributedToOldHit() throws Exception {
         open(); var event = event(); profiler.begin(event); profiler.finish(event);
@@ -162,22 +204,80 @@ public class KnockbackProfilerTest {
         var velocity = new PlayerVelocityEvent(victim, new Vector(.8, .2, 0)); profiler.beginVelocity(velocity); profiler.finishVelocity(velocity);
         String html = export();
         assertTrue(html.contains("\"after\":[0.8,0.2,0.0]"));
-        verify(scheduler, times(1)).runDelayed(eq(plugin), any(), any(), eq(3L));
+        verify(scheduler, times(1)).runDelayed(eq(plugin), any(), any(), eq(1L));
     }
     @Test public void movementOnOwningRegionRecordsDisplacement() throws Exception {
         open(); var event = event(); profiler.begin(event); profiler.finish(event);
         ArgumentCaptor<Consumer<io.papermc.paper.threadedregions.scheduler.ScheduledTask>> callback = ArgumentCaptor.forClass(Consumer.class);
-        verify(scheduler).runDelayed(eq(plugin), callback.capture(), any(), eq(3L));
+        verify(scheduler).runDelayed(eq(plugin), callback.capture(), any(), eq(1L));
         Location next = victim.getLocation().clone().add(1.2, .5, .2); when(victim.getLocation()).thenReturn(next); when(victim.getTicksLived()).thenReturn(103);
         callback.getValue().accept(null);
         String html = export(); assertTrue(html.contains("\"interrupted\":false")); assertTrue(html.contains("\"ticks\":3"));
         assertTrue(html.contains("\"dy\":0.5"));
     }
+    @Test public void trajectoryUsesActualEntityAgesAndLateWriteCompletionStaysOnOriginalHit() throws Exception {
+        var jobs = new ArrayDeque<Consumer<?>>();
+        var scheduled = mock(ScheduledTask.class);
+        doAnswer(call -> { jobs.add(call.getArgument(1)); return scheduled; }).when(scheduler).runDelayed(eq(plugin), any(), any(), eq(1L));
+        open(); var first = event(); profiler.begin(first); profiler.finish(first);
+        UUID id = victim.getUniqueId(); assertNull(profiler.motionTarget(attacker.getUniqueId()));
+        var capture = profiler.motionTarget(id);
+        var done = capture.submitted(System.nanoTime(), .7, .4, 0, true);
+        Location origin = victim.getLocation();
+        for (int tick : new int[]{0,1,2,3,4,5,6}) {
+            when(victim.getTicksLived()).thenReturn(100+tick);
+            when(victim.getLocation()).thenReturn(origin.clone().add(tick < 3 ? 0 : .7, 0, 0));
+            jobs.remove().accept(null);
+        }
+        assertTrue(jobs.isEmpty()); assertNull(profiler.motionTarget(id));
+        var second = event(); profiler.begin(second); profiler.finish(second);
+        assertNull(capture.submitted(System.nanoTime(),1,2,3,false));
+        done.accept(true);
+        var json = reportJson(export());
+        var hit = json.get(0).getAsJsonObject(); var points = hit.getAsJsonArray("trajectory");
+        assertEquals(6,points.size()); assertEquals("complete",hit.get("traceStatus").getAsString());
+        assertEquals(0,points.get(1).getAsJsonObject().get("dx").getAsDouble(),0);
+        assertEquals(.7,points.get(2).getAsJsonObject().get("dx").getAsDouble(),1e-8);
+        assertEquals(2,hit.getAsJsonObject("movement").get("ticks").getAsInt());
+        var packet = hit.getAsJsonArray("motionPackets").get(0).getAsJsonObject();
+        assertEquals("written",packet.get("status").getAsString()); assertTrue(packet.get("bundled").getAsBoolean());
+        var unfinished = json.get(1).getAsJsonObject(); assertEquals(0,unfinished.getAsJsonArray("motionPackets").size());
+        assertEquals("session-ended",unfinished.get("traceStatus").getAsString());
+    }
+    private static com.google.gson.JsonArray reportJson(String html) {
+        int start = html.indexOf('>',html.indexOf("<script id=\"profiler-data\""))+1;
+        return com.google.gson.JsonParser.parseString(html.substring(start,html.indexOf("</script>",start))).getAsJsonObject().getAsJsonArray("samples");
+    }
+    @Test public void retiredEntityAndSkippedEntityAgesAreNotCountedAsStillForSixTicks() throws Exception {
+        open(); when(scheduler.runDelayed(eq(plugin),any(),any(),eq(1L))).thenReturn(null);
+        var first=event(); profiler.begin(first); profiler.finish(first); assertNull(profiler.motionTarget(victim.getUniqueId()));
+        var jobs=new ArrayDeque<Consumer<?>>(); var scheduled=mock(ScheduledTask.class);
+        doAnswer(call->{jobs.add(call.getArgument(1));return scheduled;}).when(scheduler).runDelayed(eq(plugin),any(),any(),eq(1L));
+        var second=event(); profiler.begin(second); profiler.finish(second);
+        for(int tick : new int[]{1,3,4,5,6}) { when(victim.getTicksLived()).thenReturn(100+tick); jobs.remove().accept(null); }
+        var rows=reportJson(export()); assertEquals("retired",rows.get(0).getAsJsonObject().get("traceStatus").getAsString());
+        var trace=rows.get(1).getAsJsonObject(); assertEquals("sampling-gap",trace.get("traceStatus").getAsString());
+        assertEquals(5,trace.getAsJsonArray("trajectory").size()); assertEquals(3,trace.getAsJsonObject("movement").get("ticks").getAsInt());
+    }
+    @Test public void interruptedTraceKeepsEarlierPointAndBoundsPacketDetails() throws Exception {
+        open(); var a = event(); profiler.begin(a); profiler.finish(a);
+        var capture = profiler.motionTarget(victim.getUniqueId());
+        for(int i=0;i<10;i++) { var done=capture.submitted(System.nanoTime(),i,0,0,false); if(i==0) done.accept(false); }
+        ArgumentCaptor<Consumer<io.papermc.paper.threadedregions.scheduler.ScheduledTask>> cb = ArgumentCaptor.forClass(Consumer.class);
+        verify(scheduler).runDelayed(eq(plugin), cb.capture(), any(), eq(1L));
+        when(victim.getTicksLived()).thenReturn(101); cb.getValue().accept(null);
+        profiler.teleport(new PlayerTeleportEvent(victim,victim.getLocation(),victim.getLocation()));
+        var hit=reportJson(export()).get(0).getAsJsonObject();
+        assertEquals("teleport",hit.get("traceStatus").getAsString()); assertEquals(1,hit.getAsJsonArray("trajectory").size());
+        assertEquals(8,hit.getAsJsonArray("motionPackets").size()); assertEquals(2,hit.get("omittedMotionPackets").getAsInt());
+        assertEquals("failed",hit.getAsJsonArray("motionPackets").get(0).getAsJsonObject().get("status").getAsString());
+        assertEquals("pending",hit.getAsJsonArray("motionPackets").get(1).getAsJsonObject().get("status").getAsString());
+    }
     @Test public void newerHitMarksPreviousTrajectoryInterrupted() throws Exception {
         open(); var first = event(); profiler.begin(first); profiler.finish(first);
         var second = event(); profiler.begin(second); profiler.finish(second);
         ArgumentCaptor<Consumer<io.papermc.paper.threadedregions.scheduler.ScheduledTask>> callback = ArgumentCaptor.forClass(Consumer.class);
-        verify(scheduler, times(2)).runDelayed(eq(plugin), callback.capture(), any(), eq(3L));
+        verify(scheduler, times(2)).runDelayed(eq(plugin), callback.capture(), any(), eq(1L));
         callback.getAllValues().getFirst().accept(null);
         assertTrue(export().contains("\"interrupted\":true"));
     }
@@ -186,7 +286,7 @@ public class KnockbackProfilerTest {
         var teleport = new PlayerTeleportEvent(victim, victim.getLocation(), victim.getLocation().clone().add(100, 0, 0));
         profiler.teleport(teleport);
         ArgumentCaptor<Consumer<io.papermc.paper.threadedregions.scheduler.ScheduledTask>> callback = ArgumentCaptor.forClass(Consumer.class);
-        verify(scheduler).runDelayed(eq(plugin), callback.capture(), any(), eq(3L));
+        verify(scheduler).runDelayed(eq(plugin), callback.capture(), any(), eq(1L));
         callback.getValue().accept(null); // The original callback must preserve the explicit reason.
         var velocity = new PlayerVelocityEvent(victim, new Vector(2, 0, 0)); profiler.beginVelocity(velocity); profiler.finishVelocity(velocity);
         String html = export(); assertTrue(html.contains("\"reason\":\"teleport\""));
